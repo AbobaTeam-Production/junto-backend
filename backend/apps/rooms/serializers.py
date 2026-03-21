@@ -30,7 +30,7 @@ class RoomSerializer(serializers.ModelSerializer):
 
     def get_media(self, obj):
         from apps.media_content.models import MediaItem
-        items = MediaItem.objects.filter(room=obj).order_by('-created_at')
+        items = MediaItem.objects.filter(room=obj).order_by('created_at')
         return MediaItemSerializer(items, many=True).data
 
 

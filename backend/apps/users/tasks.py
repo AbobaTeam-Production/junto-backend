@@ -15,7 +15,7 @@ def cleanup_guest_users():
         username__startswith='Гость_',
         date_joined__lt=threshold,
     ).exclude(
-        roommember__room__status='active',
+        room_memberships__room__status='active',
     )
     count = guests.count()
     guests.delete()

@@ -26,7 +26,9 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
     command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
     environment:
       - SECRET_KEY=${SECRET_KEY:-django-insecure-dev-key-change-in-production}
@@ -40,7 +42,7 @@ services:
       - ./backend:/app
       - media:/media
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -55,9 +57,23 @@ services:
       - DATABASE_URL=postgresql://junto:junto_secret@db:5432/watchparty
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_ROOT=/media
+      - QBITTORRENT_URL=http://host.docker.internal:8080
+      - QBITTORRENT_USER=admin
+      - QBITTORRENT_PASS=adminadmin
+      - TORRENT_DOWNLOAD_DIR=H:/PycharmProjects/junto_backend/media_shared/torrents
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, video]
     volumes:
       - ./backend:/app
       - media:/media
+      - ./media_shared/torrents:/media/torrents
     depends_on:
       db:
         condition: service_healthy
@@ -81,9 +97,13 @@ services:
     image: nginx:alpine
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/cert.pem:/etc/nginx/cert.pem:ro
+      - ./nginx/key.pem:/etc/nginx/key.pem:ro
       - media:/media:ro
+      - C:/Users/alexf/StudioProjects/junto_frontend/build/web:/frontend:ro
     depends_on:
       - backend
 

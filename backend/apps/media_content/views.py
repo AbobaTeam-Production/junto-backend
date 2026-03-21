@@ -107,7 +107,8 @@ class TorrentAddView(generics.CreateAPIView):
             title='Torrent download...',
         )
 
-        # TODO: torrent_worker.delay(str(media_item.id), str(room.id), data['magnet_link'])
+        from apps.media_content.tasks import download_torrent
+        download_torrent.delay(str(media_item.id), str(room.id), data['magnet_link'])
 
         return Response({
             'media_id': str(media_item.id),

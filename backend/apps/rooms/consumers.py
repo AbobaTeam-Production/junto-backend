@@ -26,12 +26,23 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         # Track user channel for direct signaling
         await self._set_user_channel(user.id, self.channel_name)
 
+        # Track online users
+        self._add_online_user(str(user.id), self.username)
+
         await self.accept()
 
-        # Send current player state
+        # Send current player state + current media
         state = await self._get_room_state()
         if state:
             await self.send_json({'event': 'state_sync', **state})
+
+        current_media = self._get_current_media()
+        if current_media:
+            await self.send_json({'event': 'play_media', **current_media})
+
+        # Send initial online users list
+        online = self._get_online_users()
+        await self.send_json({'event': 'online_users', 'users': online})
 
         # Notify others
         await self.channel_layer.group_send(self.room_group, {
@@ -42,11 +53,13 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group'):
+            user_id = str(self.scope['user'].id)
             await self._remove_user_channel(self.scope['user'].id)
+            self._remove_online_user(user_id)
             await self.channel_layer.group_send(self.room_group, {
                 'type': 'user.left',
                 'username': self.username,
-                'user_id': str(self.scope['user'].id),
+                'user_id': user_id,
             })
             await self.channel_layer.group_discard(self.room_group, self.channel_name)
 
@@ -81,6 +94,26 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 'emoji': content.get('emoji', ''),
                 'x': content.get('x', 0.5),
                 'y': content.get('y', 0.5),
+            })
+
+        elif event_type == 'play_media':
+            if not await self._is_host(user.id):
+                return
+            media_info = {
+                'hls_url': content.get('hls_url', ''),
+                'title': content.get('title', ''),
+                'source_type': content.get('source_type', 'upload'),
+                'media_id': content.get('media_id', ''),
+            }
+            await self._save_room_state({
+                'event': 'pause',
+                'position': 0,
+                'timestamp': '',
+            })
+            self._save_current_media(media_info)
+            await self.channel_layer.group_send(self.room_group, {
+                'type': 'media.play_item',
+                **media_info,
             })
 
         elif event_type in ('webrtc_offer', 'webrtc_answer', 'ice_candidate'):
@@ -141,6 +174,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             'event': 'media_ready',
             'title': event.get('title', ''),
             'source_type': event.get('source_type', 'upload'),
+            'media_id': event.get('media_id', ''),
         }
         if event.get('hls_url'):
             payload['hls_url'] = event['hls_url']
@@ -152,6 +186,15 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({
             'event': 'media_progress',
             'progress': event['progress'],
+        })
+
+    async def media_play_item(self, event):
+        await self.send_json({
+            'event': 'play_media',
+            'hls_url': event.get('hls_url', ''),
+            'title': event.get('title', ''),
+            'source_type': event.get('source_type', 'upload'),
+            'media_id': event.get('media_id', ''),
         })
 
     async def webrtc_signal(self, event):
@@ -200,3 +243,28 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
 
     async def _get_user_channel(self, user_id):
         return cache.get(f'room_{self.room_id}_user_{user_id}_channel')
+
+    def _save_current_media(self, media_info):
+        cache.set(f'room_media_{self.room_id}', json.dumps(media_info), timeout=86400)
+
+    def _get_current_media(self):
+        data = cache.get(f'room_media_{self.room_id}')
+        if data:
+            return json.loads(data)
+        return None
+
+    def _add_online_user(self, user_id, username):
+        key = f'room_{self.room_id}_online'
+        online = cache.get(key) or {}
+        online[user_id] = username
+        cache.set(key, online, timeout=86400)
+
+    def _remove_online_user(self, user_id):
+        key = f'room_{self.room_id}_online'
+        online = cache.get(key) or {}
+        online.pop(user_id, None)
+        cache.set(key, online, timeout=86400)
+
+    def _get_online_users(self):
+        key = f'room_{self.room_id}_online'
+        return cache.get(key) or {}
