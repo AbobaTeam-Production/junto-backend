@@ -1,0 +1,92 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: watchparty
+      POSTGRES_USER: junto
+      POSTGRES_PASSWORD: junto_secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "junto", "-d", "watchparty"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-dev-key-change-in-production}
+      - DEBUG=${DEBUG:-True}
+      - DATABASE_URL=postgresql://junto:junto_secret@db:5432/watchparty
+      - REDIS_URL=redis://redis:6379/0
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      - MEDIA_ROOT=/media
+    volumes:
+      - ./backend:/app
+      - media:/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery:
+    build: ./backend
+    command: celery -A config worker -l info -c 4
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-dev-key-change-in-production}
+      - DATABASE_URL=postgresql://junto:junto_secret@db:5432/watchparty
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIA_ROOT=/media
+    volumes:
+      - ./backend:/app
+      - media:/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: ./backend
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-dev-key-change-in-production}
+      - DATABASE_URL=postgresql://junto:junto_secret@db:5432/watchparty
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - media:/media:ro
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  media:
