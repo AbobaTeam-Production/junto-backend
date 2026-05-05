@@ -26,12 +26,12 @@ class RoomSerializer(serializers.ModelSerializer):
                             'expires_at', 'status')
 
     def get_member_count(self, obj):
-        return obj.members.count()
+        # Use prefetched members to avoid extra COUNT query.
+        return len(obj.members.all())
 
     def get_media(self, obj):
-        from apps.media_content.models import MediaItem
-        items = MediaItem.objects.filter(room=obj).order_by('created_at')
-        return MediaItemSerializer(items, many=True).data
+        # Relies on Room.media_items related manager (Meta orders by created_at).
+        return MediaItemSerializer(obj.media_items.all(), many=True).data
 
 
 class RoomCreateSerializer(serializers.Serializer):

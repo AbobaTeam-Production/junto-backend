@@ -10,6 +10,12 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-dev-key')
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
+# Behind nginx — trust the X-Forwarded-Proto header so request.is_secure()
+# returns True for HTTPS clients. Without this, dynamically built WS/HTTP
+# URLs (e.g. LiveKitTokenView) come back as ws:/http: even when the page
+# is HTTPS, triggering mixed-content blocks in the browser.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 INSTALLED_APPS = [
     'daphne',
     'django.contrib.admin',
@@ -140,10 +146,10 @@ CELERY_TIMEZONE = 'UTC'
 MAX_UPLOAD_SIZE_GB = int(os.environ.get('MAX_UPLOAD_SIZE_GB', 10))
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB per chunk
 
-# TURN server config
-TURN_SERVER_URL = os.environ.get('TURN_SERVER_URL', '')
-TURN_USERNAME = os.environ.get('TURN_USERNAME', '')
-TURN_CREDENTIAL = os.environ.get('TURN_CREDENTIAL', '')
+# LiveKit (voice SFU)
+LIVEKIT_API_KEY = os.environ.get('LIVEKIT_API_KEY', '')
+LIVEKIT_API_SECRET = os.environ.get('LIVEKIT_API_SECRET', '')
+LIVEKIT_WS_URL = os.environ.get('LIVEKIT_WS_URL', '')
 
 # Caches
 CACHES = {

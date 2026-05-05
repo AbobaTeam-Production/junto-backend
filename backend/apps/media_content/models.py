@@ -19,7 +19,11 @@ class MediaItem(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='media_items')
     source_type = models.CharField(max_length=20, choices=SOURCE_CHOICES)
     original_url = models.URLField(max_length=2000, blank=True, default='')
+    # HLS playlist for browsers; transcoded by ffmpeg.
     hls_path = models.CharField(max_length=2000, blank=True, default='')
+    # Raw stream URL — used by native clients (libmpv) which can play any
+    # container/codec directly without going through HLS.
+    raw_stream_url = models.URLField(max_length=2000, blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='processing')
     duration_seconds = models.IntegerField(null=True, blank=True)
     title = models.CharField(max_length=500, blank=True, default='')

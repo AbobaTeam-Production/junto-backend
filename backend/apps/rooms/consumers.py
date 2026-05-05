@@ -1,4 +1,6 @@
 import json
+import time
+
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.core.cache import cache
@@ -22,9 +24,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             return
 
         await self.channel_layer.group_add(self.room_group, self.channel_name)
-
-        # Track user channel for direct signaling
-        await self._set_user_channel(user.id, self.channel_name)
 
         # Track online users
         self._add_online_user(str(user.id), self.username)
@@ -54,7 +53,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group'):
             user_id = str(self.scope['user'].id)
-            await self._remove_user_channel(self.scope['user'].id)
             self._remove_online_user(user_id)
             await self.channel_layer.group_send(self.room_group, {
                 'type': 'user.left',
@@ -70,6 +68,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         if event_type in ('play', 'pause', 'seek'):
             if not await self._is_host(user.id):
                 return
+            # Stamp server time so clients can drift-correct against their
+            # own clock offset (Cristian's algorithm via /api/time/).
+            content = {**content, 'server_ts': int(time.time() * 1000)}
             await self._save_room_state(content)
             await self.channel_layer.group_send(self.room_group, {
                 'type': 'player.event',
@@ -101,6 +102,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 return
             media_info = {
                 'hls_url': content.get('hls_url', ''),
+                'raw_stream_url': content.get('raw_stream_url', ''),
                 'title': content.get('title', ''),
                 'source_type': content.get('source_type', 'upload'),
                 'media_id': content.get('media_id', ''),
@@ -116,20 +118,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 **media_info,
             })
 
-        elif event_type in ('webrtc_offer', 'webrtc_answer', 'ice_candidate'):
-            target_user_id = content.get('target')
-            if target_user_id:
-                target_channel = await self._get_user_channel(target_user_id)
-                if target_channel:
-                    await self.channel_layer.send(target_channel, {
-                        'type': 'webrtc.signal',
-                        'event': event_type,
-                        'from_user': str(user.id),
-                        'from_username': self.username,
-                        'sdp': content.get('sdp'),
-                        'candidate': content.get('candidate'),
-                    })
-
     # ─── Group message handlers ─────────────────────────
 
     async def player_event(self, event):
@@ -137,6 +125,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             'event': event.get('event'),
             'position': event.get('position', 0),
             'timestamp': event.get('timestamp', ''),
+            'server_ts': event.get('server_ts'),
         })
 
     async def chat_message(self, event):
@@ -175,9 +164,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             'title': event.get('title', ''),
             'source_type': event.get('source_type', 'upload'),
             'media_id': event.get('media_id', ''),
+            'hls_url': event.get('hls_url', ''),
+            'raw_stream_url': event.get('raw_stream_url', ''),
         }
-        if event.get('hls_url'):
-            payload['hls_url'] = event['hls_url']
         if event.get('youtube_video_id'):
             payload['youtube_video_id'] = event['youtube_video_id']
         await self.send_json(payload)
@@ -192,15 +181,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({
             'event': 'play_media',
             'hls_url': event.get('hls_url', ''),
+            'raw_stream_url': event.get('raw_stream_url', ''),
             'title': event.get('title', ''),
             'source_type': event.get('source_type', 'upload'),
             'media_id': event.get('media_id', ''),
         })
-
-    async def webrtc_signal(self, event):
-        # Strip Django Channels internal 'type' key before sending to client
-        payload = {k: v for k, v in event.items() if k != 'type'}
-        await self.send_json(payload)
 
     # ─── Helpers ────────────────────────────────────────
 
@@ -232,17 +217,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             'status': content.get('event'),  # play, pause
             'position': content.get('position', 0),
             'timestamp': content.get('timestamp', ''),
+            'server_ts': content.get('server_ts'),
         })
         cache.set(f'room_state_{self.room_id}', state, timeout=86400)
-
-    async def _set_user_channel(self, user_id, channel_name):
-        cache.set(f'room_{self.room_id}_user_{user_id}_channel', channel_name, timeout=86400)
-
-    async def _remove_user_channel(self, user_id):
-        cache.delete(f'room_{self.room_id}_user_{user_id}_channel')
-
-    async def _get_user_channel(self, user_id):
-        return cache.get(f'room_{self.room_id}_user_{user_id}_channel')
 
     def _save_current_media(self, media_info):
         cache.set(f'room_media_{self.room_id}', json.dumps(media_info), timeout=86400)

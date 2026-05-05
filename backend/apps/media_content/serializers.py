@@ -7,14 +7,16 @@ from .models import MediaItem
 class MediaItemSerializer(serializers.ModelSerializer):
     hls_url = serializers.SerializerMethodField()
     youtube_video_id = serializers.SerializerMethodField()
+    raw_stream_url = serializers.CharField(read_only=True)
 
     class Meta:
         model = MediaItem
         fields = ('id', 'room', 'source_type', 'original_url', 'hls_url',
-                  'youtube_video_id', 'status', 'duration_seconds', 'title',
-                  'progress', 'created_at')
-        read_only_fields = ('id', 'status', 'hls_url', 'youtube_video_id',
-                            'duration_seconds', 'progress', 'created_at')
+                  'raw_stream_url', 'youtube_video_id', 'status',
+                  'duration_seconds', 'title', 'progress', 'created_at')
+        read_only_fields = ('id', 'status', 'hls_url', 'raw_stream_url',
+                            'youtube_video_id', 'duration_seconds',
+                            'progress', 'created_at')
 
     def get_hls_url(self, obj):
         if obj.hls_path:

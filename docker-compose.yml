@@ -7,8 +7,8 @@ services:
       POSTGRES_PASSWORD: junto_secret
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "junto", "-d", "watchparty"]
       interval: 5s
@@ -17,8 +17,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,9 +35,21 @@ services:
       - DEBUG=${DEBUG:-True}
       - DATABASE_URL=postgresql://junto:junto_secret@db:5432/watchparty
       - REDIS_URL=redis://redis:6379/0
-      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*,176.214.93.127}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080,https://176.214.93.127:8443,http://176.214.93.127:8080}
       - MEDIA_ROOT=/media
+      - TORRSERVER_URL=${TORRSERVER_URL:-http://torrserver:8090}
+      - TORRSERVER_PUBLIC_URL=${TORRSERVER_PUBLIC_URL:-}
+      - JACRED_URL=${JACRED_URL:-http://jacred:9117}
+      - JACRED_APIKEY=${JACRED_APIKEY:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-devsecretdevsecretdevsecretdevse}
+      # Public-facing LiveKit WebSocket URL the CLIENT will connect to.
+      # Must be reachable from the user's browser/device. For the default
+      # nginx + self-signed setup on junto.local, configure TLS in
+      # livekit.yaml and set this to wss://junto.local:7880, or proxy
+      # through nginx and use wss://junto.local/livekit.
+      - LIVEKIT_WS_URL=${LIVEKIT_WS_URL:-}
     volumes:
       - ./backend:/app
       - media:/media
@@ -57,23 +69,13 @@ services:
       - DATABASE_URL=postgresql://junto:junto_secret@db:5432/watchparty
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_ROOT=/media
-      - QBITTORRENT_URL=http://host.docker.internal:8080
-      - QBITTORRENT_USER=admin
-      - QBITTORRENT_PASS=adminadmin
-      - TORRENT_DOWNLOAD_DIR=H:/PycharmProjects/junto_backend/media_shared/torrents
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu, video]
+      - TORRSERVER_URL=${TORRSERVER_URL:-http://torrserver:8090}
+      - TORRSERVER_PUBLIC_URL=${TORRSERVER_PUBLIC_URL:-}
+      - JACRED_URL=${JACRED_URL:-http://jacred:9117}
+      - JACRED_APIKEY=${JACRED_APIKEY:-}
     volumes:
       - ./backend:/app
       - media:/media
-      - ./media_shared/torrents:/media/torrents
     depends_on:
       db:
         condition: service_healthy
@@ -93,11 +95,47 @@ services:
       redis:
         condition: service_healthy
 
+  torrserver:
+    build: ./torrserver
+    restart: unless-stopped
+    volumes:
+      - torrserver-config:/opt/torrserver/config
+      - torrserver-torrents:/opt/torrserver/torrents
+    expose:
+      - "8090"
+
+  jacred:
+    image: ghcr.io/jacred-fdb/jacred:latest
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Moscow
+    volumes:
+      - jacred-config:/app/config
+      - jacred-data:/app/Data
+    expose:
+      - "9117"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devsecretdevsecretdevsecretdevse}"
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"      # signaling (WebSocket)
+      - "7881:7881"      # RTC TCP fallback
+      - "7882:7882/udp"  # RTC media (single multiplexed UDP port)
+    depends_on:
+      redis:
+        condition: service_healthy
+
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
+      - "8443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/cert.pem:/etc/nginx/cert.pem:ro
@@ -106,7 +144,12 @@ services:
       - C:/Users/alexf/StudioProjects/junto_frontend/build/web:/frontend:ro
     depends_on:
       - backend
+      - livekit
 
 volumes:
   pgdata:
   media:
+  torrserver-config:
+  torrserver-torrents:
+  jacred-config:
+  jacred-data:

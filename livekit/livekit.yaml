@@ -1,0 +1,27 @@
+port: 7880
+bind_addresses:
+  - ""
+
+rtc:
+  tcp_port: 7881
+  # Single-UDP-port mode: all RTC streams multiplexed through one UDP port.
+  # Works around Docker Desktop on Windows being slow/unreliable when
+  # publishing UDP ranges through vpnkit.
+  udp_port: 7882
+  use_external_ip: false
+
+redis:
+  address: redis:6379
+
+# Keys are also injected via the LIVEKIT_KEYS env in docker-compose.yml,
+# but the file form is required when --config is set. Override these in
+# .env via LIVEKIT_API_KEY / LIVEKIT_API_SECRET (must be 32+ chars).
+keys:
+  66a634ffcac08f2799c20a8f9c67d1fe: jalQfQr2n1XyC3cdLDW5F+JpsWp4F4IG/strDBQF1xJS2CZixG5C4Y1ljQPnqeQ3
+
+room:
+  empty_timeout: 300
+  max_participants: 100
+
+logging:
+  level: info

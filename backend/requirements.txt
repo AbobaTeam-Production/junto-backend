@@ -14,3 +14,5 @@ yt-dlp-ejs
 curl_cffi
 ffmpeg-python>=0.2
 dj-database-url>=2.1
+httpx>=0.27
+livekit-api>=1.1
