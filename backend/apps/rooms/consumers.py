@@ -28,6 +28,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         # Track online users
         self._add_online_user(str(user.id), self.username)
 
+        # Open (or resume) a WatchSession so the user's profile stats reflect
+        # this session. Reconnects within 30s reuse the same row (page
+        # reload, transient network drops) — see _open_watch_session.
+        await self._open_watch_session(user.id)
+
         await self.accept()
 
         # Send current player state + current media
@@ -53,6 +58,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group'):
             user_id = str(self.scope['user'].id)
+            await self._close_watch_session(user_id)
             self._remove_online_user(user_id)
             await self.channel_layer.group_send(self.room_group, {
                 'type': 'user.left',
@@ -245,3 +251,62 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     def _get_online_users(self):
         key = f'room_{self.room_id}_online'
         return cache.get(key) or {}
+
+    # ─── WatchSession lifecycle ────────────────────────────
+    #
+    # On connect we either resume the user's previous WatchSession (if it
+    # closed less than 30 sec ago — page reload, network blip) or open a
+    # fresh one. On disconnect we close the row and stash its id in the
+    # cache for `_RECONNECT_TOLERANCE_SEC` so a fast reopen reuses it.
+
+    _RECONNECT_TOLERANCE_SEC = 30
+
+    async def _open_watch_session(self, user_id):
+        cache_key = f'last_watch_session_{user_id}_{self.room_id}'
+        candidate = cache.get(cache_key)
+        sid = await self._reuse_or_create_session(user_id, candidate)
+        self._watch_session_id = sid
+        cache.delete(cache_key)
+
+    async def _close_watch_session(self, user_id):
+        sid = getattr(self, '_watch_session_id', None)
+        if not sid:
+            return
+        await self._finalize_session(sid)
+        cache.set(
+            f'last_watch_session_{user_id}_{self.room_id}',
+            sid,
+            timeout=self._RECONNECT_TOLERANCE_SEC,
+        )
+        self._watch_session_id = None
+
+    @database_sync_to_async
+    def _reuse_or_create_session(self, user_id, candidate_id):
+        from apps.social.models import WatchSession
+        if candidate_id:
+            session = WatchSession.objects.filter(
+                id=candidate_id, user_id=user_id, room_id=self.room_id
+            ).first()
+            if session is not None:
+                # Reopen — duration is recomputed on the next disconnect
+                # against the original joined_at, so wiping `left_at` is
+                # enough to mark it active again.
+                session.left_at = None
+                session.duration_sec = 0
+                session.save(update_fields=['left_at', 'duration_sec'])
+                return session.id
+        return WatchSession.objects.create(
+            user_id=user_id, room_id=self.room_id
+        ).id
+
+    @database_sync_to_async
+    def _finalize_session(self, session_id):
+        from django.utils import timezone
+        from apps.social.models import WatchSession
+        session = WatchSession.objects.filter(id=session_id).first()
+        if session is None:
+            return
+        now = timezone.now()
+        session.left_at = now
+        session.duration_sec = max(0, int((now - session.joined_at).total_seconds()))
+        session.save(update_fields=['left_at', 'duration_sec'])

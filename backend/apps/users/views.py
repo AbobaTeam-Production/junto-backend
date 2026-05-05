@@ -6,6 +6,8 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
+from django.db.models import Count, Sum
+from django.db.models.functions import Coalesce
 
 from .serializers import RegisterSerializer, UserSerializer
 
@@ -56,4 +58,11 @@ class ProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
 
     def get_object(self):
-        return self.request.user
+        # Annotate session count + summed watch duration so the profile
+        # endpoint serves the user's stats in a single query. Fall back
+        # to 0 when there are no sessions (Coalesce on Sum).
+        qs = User.objects.filter(pk=self.request.user.pk).annotate(
+            sessions_count=Count('watch_sessions', distinct=True),
+            watch_seconds=Coalesce(Sum('watch_sessions__duration_sec'), 0),
+        )
+        return qs.get()
