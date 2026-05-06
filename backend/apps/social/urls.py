@@ -6,6 +6,9 @@ from .views import (
     FriendRequestSendView,
     FriendRequestAcceptView,
     FriendshipDestroyView,
+    UserDeviceDestroyView,
+    UserDeviceRegisterView,
+    UserDeviceTestPushView,
     UserSearchView,
 )
 
@@ -17,4 +20,7 @@ urlpatterns = [
     path('friends/<int:pk>/accept/', FriendRequestAcceptView.as_view(), name='friend-request-accept'),
     path('friends/<int:pk>/', FriendshipDestroyView.as_view(), name='friendship-destroy'),
     path('users/search/', UserSearchView.as_view(), name='user-search'),
+    path('users/devices/', UserDeviceRegisterView.as_view(), name='user-device-register'),
+    path('users/devices/test-push/', UserDeviceTestPushView.as_view(), name='user-device-test-push'),
+    path('users/devices/<int:pk>/', UserDeviceDestroyView.as_view(), name='user-device-destroy'),
 ]

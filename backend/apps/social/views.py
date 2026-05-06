@@ -1,4 +1,4 @@
-"""Friends endpoints.
+"""Friends + devices endpoints.
 
 POST   /api/friends/request/                  → send friend request
 POST   /api/friends/<id>/accept/              → accept incoming request
@@ -6,19 +6,29 @@ DELETE /api/friends/<id>/                     → decline pending OR unfriend ac
 GET    /api/friends/                          → list of accepted friendships
 GET    /api/friends/requests/                 → pending requests inbox
 GET    /api/users/search/?q=...               → search users (paginated)
+
+POST   /api/users/devices/                    → register/refresh FCM token
+DELETE /api/users/devices/<id>/               → unregister device (logout)
+POST   /api/users/devices/test-push/          → DEBUG-only: send a push to self
 """
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import generics
+from rest_framework import generics, status
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Friendship
-from .serializers import FriendshipSerializer, UserSearchSerializer
+from .models import Friendship, UserDevice
+from . import push
+from .serializers import (
+    FriendshipSerializer,
+    UserDeviceSerializer,
+    UserSearchSerializer,
+)
 
 User = get_user_model()
 
@@ -79,6 +89,16 @@ class FriendRequestSendView(APIView):
                 reverse.status = Friendship.ACCEPTED
                 reverse.accepted_at = timezone.now()
                 reverse.save(update_fields=['status', 'accepted_at'])
+                # Auto-accept path: notify the original sender that their
+                # request just turned into a friendship.
+                push.send_to_user(
+                    target,
+                    title='Junto',
+                    body=f'{request.user.username} принял(а) вашу заявку',
+                    data={'type': 'friend_accepted',
+                          'friendship_id': reverse.id,
+                          'from_id': request.user.id},
+                )
             return Response(
                 FriendshipSerializer(reverse, context={'request': request}).data,
                 status=200,
@@ -94,6 +114,14 @@ class FriendRequestSendView(APIView):
             )
 
         f = Friendship.objects.create(from_user=request.user, to_user=target)
+        push.send_to_user(
+            target,
+            title='Junto',
+            body=f'{request.user.username} хочет добавить вас в друзья',
+            data={'type': 'friend_request',
+                  'friendship_id': f.id,
+                  'from_id': request.user.id},
+        )
         return Response(
             FriendshipSerializer(f, context={'request': request}).data,
             status=201,
@@ -108,6 +136,14 @@ class FriendRequestAcceptView(APIView):
         f.status = Friendship.ACCEPTED
         f.accepted_at = timezone.now()
         f.save(update_fields=['status', 'accepted_at'])
+        push.send_to_user(
+            f.from_user,
+            title='Junto',
+            body=f'{request.user.username} принял(а) вашу заявку',
+            data={'type': 'friend_accepted',
+                  'friendship_id': f.id,
+                  'from_id': request.user.id},
+        )
         return Response(
             FriendshipSerializer(f, context={'request': request}).data
         )
@@ -182,3 +218,50 @@ class UserSearchView(generics.ListAPIView):
                 u._relation = 'pending_incoming'
             else:
                 u._relation = 'none'
+
+
+class UserDeviceRegisterView(APIView):
+    """Upsert (user, fcm_token) → bumps `last_seen_at` on duplicate.
+
+    Request body: {"fcm_token": str, "platform": "android"|"ios"|"web"}.
+    Returns the device row id so the client can DELETE it on logout.
+    """
+
+    def post(self, request):
+        token = (request.data.get('fcm_token') or '').strip()
+        platform = (request.data.get('platform') or '').strip()
+        if not token:
+            return Response({'detail': 'fcm_token required'}, status=400)
+        if platform not in dict(UserDevice.PLATFORMS):
+            return Response({'detail': 'invalid platform'}, status=400)
+
+        device, _created = UserDevice.objects.update_or_create(
+            user=request.user,
+            fcm_token=token,
+            defaults={'platform': platform},
+        )
+        return Response(UserDeviceSerializer(device).data, status=200)
+
+
+class UserDeviceDestroyView(generics.DestroyAPIView):
+    """Unregister a device — used on logout / disabling notifications."""
+
+    def get_queryset(self):
+        return UserDevice.objects.filter(user=self.request.user)
+
+
+class UserDeviceTestPushView(APIView):
+    """DEBUG-only smoke-test — sends "Hello" to every device of the
+    current user. Returns the FCM-reported success count.
+    """
+
+    def post(self, request):
+        if not settings.DEBUG:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        sent = push.send_to_user(
+            request.user,
+            title='Junto',
+            body='Test push — если видите это, FCM работает.',
+            data={'type': 'test_push'},
+        )
+        return Response({'sent': sent})

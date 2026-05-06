@@ -152,6 +152,12 @@ LIVEKIT_API_KEY = os.environ.get('LIVEKIT_API_KEY', '')
 LIVEKIT_API_SECRET = os.environ.get('LIVEKIT_API_SECRET', '')
 LIVEKIT_WS_URL = os.environ.get('LIVEKIT_WS_URL', '')
 
+# Firebase / FCM. When unset, push.send_to_user() is a quiet no-op so
+# dev environments without Firebase keep working. Flipped to True in
+# apps.social.apps.SocialConfig.ready() if the SDK initialises cleanly.
+FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH', '')
+FCM_ENABLED = False
+
 # Caches
 CACHES = {
     'default': {

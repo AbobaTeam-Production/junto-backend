@@ -50,6 +50,9 @@ services:
       # livekit.yaml and set this to wss://junto.local:7880, or proxy
       # through nginx and use wss://junto.local/livekit.
       - LIVEKIT_WS_URL=${LIVEKIT_WS_URL:-}
+      # Path inside the container — `./backend` is mounted at /app, so a
+      # JSON dropped at backend/<name>.json is reachable at /app/<name>.json.
+      - FIREBASE_CREDENTIALS_PATH=${FIREBASE_CREDENTIALS_PATH:-}
     volumes:
       - ./backend:/app
       - media:/media

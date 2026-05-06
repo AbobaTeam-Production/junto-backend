@@ -9,7 +9,7 @@ extra lookups.
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
-from .models import Friendship
+from .models import Friendship, UserDevice
 
 User = get_user_model()
 
@@ -68,3 +68,10 @@ class UserSearchSerializer(_PeerSerializer):
     def get_relation(self, obj):
         # Annotated by UserSearchView (`_relation`) to avoid N+1.
         return getattr(obj, '_relation', 'none')
+
+
+class UserDeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserDevice
+        fields = ('id', 'fcm_token', 'platform', 'last_seen_at')
+        read_only_fields = ('id', 'last_seen_at')
