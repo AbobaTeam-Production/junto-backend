@@ -11,6 +11,18 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 
 
+# Bumped when the cached payload structure or write semantics change. Old
+# unversioned entries (`room_media_<id>`) and prior versions are simply left
+# to expire — clients re-fetch via /api/rooms/<id>/ on reconnect.
+_ROOM_MEDIA_CACHE_VERSION = 'v2'
+# 30 min: cache is an optimization for reconnects, not the source of truth.
+ROOM_MEDIA_CACHE_TTL = 1800
+
+
+def room_media_cache_key(room_id):
+    return f'room_media_{_ROOM_MEDIA_CACHE_VERSION}_{room_id}'
+
+
 def _get_duration_seconds(input_path: str) -> float | None:
     """Get video duration in seconds via ffprobe."""
     probe = subprocess.run(
@@ -171,13 +183,13 @@ def _transcode_with_progress(media_id: str, room_id: str, input_path: str,
             return
         hls_url = f'/media/{hls_relative}'
         raw_url = media.raw_stream_url or ''
-        cache.set(f'room_media_{room_id}', _json.dumps({
+        cache.set(room_media_cache_key(room_id), _json.dumps({
             'hls_url': hls_url,
             'raw_stream_url': raw_url,
             'title': media.title,
             'source_type': media.source_type,
             'media_id': str(media.id),
-        }), timeout=86400)
+        }), timeout=ROOM_MEDIA_CACHE_TTL)
         async_to_sync(get_channel_layer().group_send)(
             f'room_{room_id}',
             {
@@ -239,14 +251,14 @@ def _transcode_with_progress(media_id: str, room_id: str, input_path: str,
 
     # Refresh current-media cache with both URLs so a reconnecting client
     # gets the right pair on state_sync.
-    cache_key = f'room_media_{room_id}'
+    cache_key = room_media_cache_key(room_id)
     cache.set(cache_key, _json.dumps({
         'hls_url': hls_url,
         'raw_stream_url': raw_url,
         'title': media.title,
         'source_type': media.source_type,
         'media_id': str(media.id),
-    }), timeout=86400)
+    }), timeout=ROOM_MEDIA_CACHE_TTL)
 
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
@@ -408,7 +420,7 @@ def _torrent_finalize(media, room_id: str, ts: _TorrServerClient,
     media.save(update_fields=['raw_stream_url', 'status', 'progress', 'title'])
 
     from django.core.cache import cache
-    cache_key = f'room_media_{room_id}'
+    cache_key = room_media_cache_key(room_id)
     if not cache.get(cache_key):
         cache.set(cache_key, _json.dumps({
             'hls_url': '',
@@ -416,7 +428,7 @@ def _torrent_finalize(media, room_id: str, ts: _TorrServerClient,
             'title': media.title,
             'source_type': media.source_type,
             'media_id': str(media.id),
-        }), timeout=86400)
+        }), timeout=ROOM_MEDIA_CACHE_TTL)
 
     async_to_sync(get_channel_layer().group_send)(
         f'room_{room_id}',
