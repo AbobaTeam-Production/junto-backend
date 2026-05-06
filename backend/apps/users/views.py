@@ -58,11 +58,27 @@ class ProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
 
     def get_object(self):
-        # Annotate session count + summed watch duration so the profile
-        # endpoint serves the user's stats in a single query. Fall back
-        # to 0 when there are no sessions (Coalesce on Sum).
-        qs = User.objects.filter(pk=self.request.user.pk).annotate(
+        # Annotate session count + summed watch duration + friend counts
+        # so the profile endpoint serves all stats in a single query.
+        from django.db.models import Q as _Q
+        from apps.social.models import Friendship
+        u = self.request.user
+
+        friends_count = Friendship.objects.filter(
+            _Q(from_user=u) | _Q(to_user=u),
+            status=Friendship.ACCEPTED,
+        ).count()
+        pending_requests_count = Friendship.objects.filter(
+            to_user=u, status=Friendship.PENDING,
+        ).count()
+
+        qs = User.objects.filter(pk=u.pk).annotate(
             sessions_count=Count('watch_sessions', distinct=True),
             watch_seconds=Coalesce(Sum('watch_sessions__duration_sec'), 0),
         )
-        return qs.get()
+        user = qs.get()
+        # Counts are kept as plain attributes — DRF's serializer fields with
+        # `default=0` happily read them via `getattr`.
+        user.friends_count = friends_count
+        user.pending_requests_count = pending_requests_count
+        return user

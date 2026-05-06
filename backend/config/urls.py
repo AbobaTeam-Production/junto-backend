@@ -24,6 +24,7 @@ urlpatterns = [
     path('api/auth/', include('apps.users.urls')),
     path('api/rooms/', include('apps.rooms.urls')),
     path('api/media/', include('apps.media_content.urls')),
+    path('api/', include('apps.social.urls')),
 ]
 
 if settings.DEBUG:

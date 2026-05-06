@@ -29,14 +29,21 @@ class UserSerializer(serializers.ModelSerializer):
     # annotation (e.g. nested in chat / room responses).
     sessions_count = serializers.IntegerField(read_only=True, default=0)
     watch_seconds = serializers.IntegerField(read_only=True, default=0)
+    friends_count = serializers.IntegerField(read_only=True, default=0)
+    pending_requests_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = User
         fields = (
             'id', 'username', 'email', 'avatar', 'avatar_url',
             'sessions_count', 'watch_seconds',
+            'friends_count', 'pending_requests_count',
         )
-        read_only_fields = ('id', 'avatar_url', 'sessions_count', 'watch_seconds')
+        read_only_fields = (
+            'id', 'avatar_url',
+            'sessions_count', 'watch_seconds',
+            'friends_count', 'pending_requests_count',
+        )
         extra_kwargs = {'avatar': {'write_only': True, 'required': False}}
 
     def get_avatar_url(self, obj):
