@@ -10,6 +10,7 @@ from .views import (
     UserDeviceRegisterView,
     UserDeviceTestPushView,
     UserSearchView,
+    WatchHistoryView,
 )
 
 # Mounted in config/urls.py — see api/ patterns.
@@ -23,4 +24,5 @@ urlpatterns = [
     path('users/devices/', UserDeviceRegisterView.as_view(), name='user-device-register'),
     path('users/devices/test-push/', UserDeviceTestPushView.as_view(), name='user-device-test-push'),
     path('users/devices/<int:pk>/', UserDeviceDestroyView.as_view(), name='user-device-destroy'),
+    path('profile/sessions/', WatchHistoryView.as_view(), name='profile-watch-history'),
 ]

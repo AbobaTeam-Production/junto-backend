@@ -9,7 +9,7 @@ extra lookups.
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
-from .models import Friendship, UserDevice
+from .models import Friendship, UserDevice, WatchSession
 
 User = get_user_model()
 
@@ -75,3 +75,35 @@ class UserDeviceSerializer(serializers.ModelSerializer):
         model = UserDevice
         fields = ('id', 'fcm_token', 'platform', 'last_seen_at')
         read_only_fields = ('id', 'last_seen_at')
+
+
+class WatchSessionSerializer(serializers.ModelSerializer):
+    """Wraps a WatchSession + minimal Room context.
+
+    Room has no human-readable title, so we ship `invite_code` and let
+    the client render "Комната <code>". `room_status` lets the UI
+    enable the Зайти button only for still-active rooms.
+    """
+
+    room_id = serializers.UUIDField(source='room.id', read_only=True)
+    room_invite_code = serializers.CharField(source='room.invite_code', read_only=True)
+    room_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WatchSession
+        fields = (
+            'id',
+            'room_id',
+            'room_invite_code',
+            'room_status',
+            'joined_at',
+            'duration_sec',
+        )
+
+    def get_room_status(self, obj):
+        # Effective status: a room past its expires_at is reported as
+        # 'expired' even if the cron hasn't flipped its status field yet.
+        room = obj.room
+        if room.status == 'active' and room.is_expired:
+            return 'expired'
+        return room.status

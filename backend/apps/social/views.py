@@ -1,4 +1,4 @@
-"""Friends + devices endpoints.
+"""Friends + devices + history endpoints.
 
 POST   /api/friends/request/                  → send friend request
 POST   /api/friends/<id>/accept/              → accept incoming request
@@ -10,6 +10,8 @@ GET    /api/users/search/?q=...               → search users (paginated)
 POST   /api/users/devices/                    → register/refresh FCM token
 DELETE /api/users/devices/<id>/               → unregister device (logout)
 POST   /api/users/devices/test-push/          → DEBUG-only: send a push to self
+
+GET    /api/profile/sessions/?limit=&offset=  → my watch-session history
 """
 
 from django.conf import settings
@@ -22,12 +24,13 @@ from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Friendship, UserDevice
+from .models import Friendship, UserDevice, WatchSession
 from . import push
 from .serializers import (
     FriendshipSerializer,
     UserDeviceSerializer,
     UserSearchSerializer,
+    WatchSessionSerializer,
 )
 
 User = get_user_model()
@@ -248,6 +251,24 @@ class UserDeviceDestroyView(generics.DestroyAPIView):
 
     def get_queryset(self):
         return UserDevice.objects.filter(user=self.request.user)
+
+
+class WatchHistoryView(generics.ListAPIView):
+    """Paginated list of the current user's watch sessions, newest first.
+
+    Fed into the "Последние сеансы" sheet on the profile screen — the
+    UI taps `sessions_count` and pages 20 rows at a time.
+    """
+    serializer_class = WatchSessionSerializer
+    pagination_class = LimitOffsetPagination
+
+    def get_queryset(self):
+        return (
+            WatchSession.objects
+            .filter(user=self.request.user)
+            .select_related('room')
+            .order_by('-joined_at')
+        )
 
 
 class UserDeviceTestPushView(APIView):
