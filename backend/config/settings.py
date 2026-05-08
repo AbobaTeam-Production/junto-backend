@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'apps.rooms',
     'apps.media_content',
     'apps.social',
+    'apps.movies',
 ]
 
 MIDDLEWARE = [
@@ -46,6 +47,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.movies.middleware.PresenceMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -157,6 +159,11 @@ LIVEKIT_WS_URL = os.environ.get('LIVEKIT_WS_URL', '')
 # apps.social.apps.SocialConfig.ready() if the SDK initialises cleanly.
 FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH', '')
 FCM_ENABLED = False
+
+# poiskkino.dev — Kinopoisk-clone metadata API (X-API-KEY header).
+# Empty key disables the recommendations endpoints; the FE just shows
+# placeholder posters.
+POISKKINO_API_KEY = os.environ.get('POISKKINO_API_KEY', '')
 
 # Caches
 CACHES = {

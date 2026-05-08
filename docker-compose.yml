@@ -53,6 +53,9 @@ services:
       # Path inside the container — `./backend` is mounted at /app, so a
       # JSON dropped at backend/<name>.json is reachable at /app/<name>.json.
       - FIREBASE_CREDENTIALS_PATH=${FIREBASE_CREDENTIALS_PATH:-}
+      # Movie metadata API (recommendations system). Empty = recs
+      # endpoints fall back to placeholder posters.
+      - POISKKINO_API_KEY=${POISKKINO_API_KEY:-}
     volumes:
       - ./backend:/app
       - media:/media
