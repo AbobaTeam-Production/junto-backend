@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     'apps.media_content',
     'apps.social',
     'apps.movies',
+    'apps.billing',
 ]
 
 MIDDLEWARE = [
@@ -160,10 +161,24 @@ LIVEKIT_WS_URL = os.environ.get('LIVEKIT_WS_URL', '')
 FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH', '')
 FCM_ENABLED = False
 
-# poiskkino.dev — Kinopoisk-clone metadata API (X-API-KEY header).
-# Empty key disables the recommendations endpoints; the FE just shows
-# placeholder posters.
-POISKKINO_API_KEY = os.environ.get('POISKKINO_API_KEY', '')
+# TMDb — primary metadata source. api.themoviedb.org is unreachable
+# from RU, so we go through a Cloudflare Worker reverse-proxy
+# (deploy/cf-worker-tmdb). Three secrets:
+#   TMDB_API_KEY    — v3 key from themoviedb.org/settings/api
+#   TMDB_PROXY_BASE — Worker URL, e.g. https://tmdb-proxy.<acc>.workers.dev
+#   TMDB_PROXY_SECRET — shared secret (X-Proxy-Secret), `wrangler secret put`
+# Empty TMDb config keeps the recs endpoints alive (placeholder
+# posters) but seed_movies refuses to run.
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '')
+TMDB_PROXY_BASE = os.environ.get('TMDB_PROXY_BASE', '')
+TMDB_PROXY_SECRET = os.environ.get('TMDB_PROXY_SECRET', '')
+# Public CF Worker that proxies image.tmdb.org. Empty falls back to
+# the upstream URL — only useful when the deployment isn't blocked
+# from reaching image.tmdb.org directly.
+TMDB_IMAGE_BASE = os.environ.get(
+    'TMDB_IMAGE_BASE', 'https://image.tmdb.org',
+).rstrip('/')
+TMDB_ENABLED = bool(TMDB_API_KEY and TMDB_PROXY_BASE and TMDB_PROXY_SECRET)
 
 # Caches
 CACHES = {

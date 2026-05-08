@@ -8,6 +8,7 @@ POST   /api/recs/title/<movie_id>/intent/    → Toggle WatchIntent
 POST   /api/recs/title/<movie_id>/invite/    → Create room w/ media expectation
 """
 
+from django.core.cache import cache
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
@@ -18,7 +19,7 @@ from apps.rooms.models import Room
 from apps.social.models import Friendship
 from apps.social import push as fcm_push
 
-from . import matching, presence
+from . import matching, presence, rutube_trailers, tmdb
 from .models import Movie, MoodList, WatchIntent
 from .serializers import (
     MoodListSerializer,
@@ -63,6 +64,45 @@ def _friend_payload(peer) -> dict:
     }
 
 
+_TRENDING_CACHE_KEY = 'tmdb_trending_week_ids'
+_TRENDING_CACHE_TTL = 6 * 60 * 60  # 6 hours
+
+
+def _trending_week_movies(exclude_ids=None):
+    """Returns up to 12 trending-this-week movies as `Movie` rows.
+
+    Cached id-list in Redis for 6 hours so we don't hammer TMDb / the
+    CF Worker on every feed open. New ids are upserted so the FE can
+    route to /recs/title/<id> as if they were already in the catalog.
+    """
+    excluded = set(exclude_ids or [])
+    cached = cache.get(_TRENDING_CACHE_KEY)
+    movie_ids = []
+    if isinstance(cached, list) and cached:
+        movie_ids = [int(i) for i in cached]
+    else:
+        for raw in tmdb.trending_week(limit=12):
+            tmdb_id = raw.get('id')
+            if not tmdb_id:
+                continue
+            # Trending returns the same shape as discover (no runtime).
+            # `fetch` fills genres + duration so the title detail page
+            # is complete; fall back to abridged upsert on 4xx.
+            movie = tmdb.fetch(int(tmdb_id)) or tmdb.upsert(raw)
+            if movie is not None:
+                movie_ids.append(movie.id)
+        if movie_ids:
+            cache.set(_TRENDING_CACHE_KEY, movie_ids, timeout=_TRENDING_CACHE_TTL)
+
+    if not movie_ids:
+        return []
+
+    rows = Movie.objects.filter(id__in=movie_ids).exclude(id__in=excluded)
+    by_id = {m.id: m for m in rows}
+    # Preserve TMDb's trending order from the cached list.
+    return [by_id[i] for i in movie_ids if i in by_id][:12]
+
+
 class RecsFeedView(APIView):
     """The 'Что посмотреть вечером?' screen.
 
@@ -80,13 +120,16 @@ class RecsFeedView(APIView):
         friends_payload = [_friend_payload(f) for f in friends]
 
         # ── Hero: top-rated unwatched feature-length movie ──
-        # `duration_min >= 60` strips shorts and trailers — without
-        # this poiskkino's top-N occasionally surfaces a 6-minute
-        # student film that has 8.x rating from 200 votes.
+        # Filters:
+        #   - `duration_min >= 60` strips shorts.
+        #   - `kp_rating <= 9` drops cult-niche films with inflated
+        #     averages (TMDb classics top out at ~8.7; anything 9+
+        #     is almost always a small-audience artefact like
+        #     "Forest Hymn for Little Girls").
         watched_ids = list(me.movie_views.values_list('movie_id', flat=True)[:200])
         hero_qs = (
             Movie.objects
-            .filter(is_series=False, duration_min__gte=60)
+            .filter(is_series=False, duration_min__gte=60, kp_rating__lte=9)
             .exclude(id__in=watched_ids)
             .order_by('-kp_rating')[:5]
         )
@@ -124,15 +167,20 @@ class RecsFeedView(APIView):
                     'movies': MovieMiniSerializer(intent_movies, many=True).data,
                 }
 
+        # ── Trending this week — pulled live from TMDb (cached 6h in
+        # Redis). Up-serts new entries into Movie so the FE can route
+        # to /recs/title/<id> as if they were already in the catalog.
+        trending = _trending_week_movies(exclude_ids=watched_ids)
+
         # ── Top by KP — covers the case when social/intent signal is
         # thin (everyone's just signed up). 12 highest-rated unwatched
-        # films excluding the hero so we don't show it twice.
-        excluded = set(watched_ids)
+        # films excluding the hero and trending so we don't repeat.
+        excluded = set(watched_ids) | {m.id for m in trending}
         if hero_movie is not None:
             excluded.add(hero_movie.id)
         top_kp = (
             Movie.objects
-            .filter(is_series=False, duration_min__gte=60)
+            .filter(is_series=False, duration_min__gte=60, kp_rating__lte=9)
             .exclude(id__in=excluded)
             .order_by('-kp_rating')[:12]
         )
@@ -144,13 +192,30 @@ class RecsFeedView(APIView):
             .filter(num__gt=0)
             .order_by('position', 'title')[:8]
         )
+        moods_payload = MoodListSerializer(moods, many=True).data
+
+        # Sponsored mood is shown only on the free tier — part of the
+        # value-prop of Pro is "no ads in feed". Pro/Cinema get one
+        # extra editorial slot ("Премьеры недели") instead.
+        from apps.billing.utils import is_pro as _is_pro
+        if not _is_pro(me):
+            moods_payload.insert(0, {
+                'id': 0,
+                'slug': 'sponsored',
+                'title': 'Marvel ночь от партнёров',
+                'subtitle': 'Реклама',
+                'hue': 30,
+                'count': 8,
+                'is_sponsored': True,
+            })
 
         return Response({
             'friends_online': friends_payload,
             'hero': hero_payload,
+            'trending': MovieMiniSerializer(trending, many=True).data,
             'social_row': social_row,
             'top_by_kp': MovieMiniSerializer(top_kp, many=True).data,
-            'moods': MoodListSerializer(moods, many=True).data,
+            'moods': moods_payload,
         })
 
 
@@ -226,6 +291,20 @@ class RecsTitleView(APIView):
     def get(self, request, movie_id: int):
         me = request.user
         movie = get_object_or_404(Movie.objects.prefetch_related('genres'), pk=movie_id)
+        # Lazy-resolve a Rutube trailer the first time anyone opens
+        # this movie's detail. We mark `trailer_lookup_at` even on
+        # misses so we don't re-search every open — a daily refresh
+        # job can re-try later if we want.
+        from django.utils import timezone
+        if not movie.trailer_lookup_at:
+            video_id = rutube_trailers.find_trailer_id(
+                title_ru=movie.title_ru,
+                title_orig=movie.title_orig,
+                year=movie.year,
+            )
+            movie.trailer_rutube_id = video_id or ''
+            movie.trailer_lookup_at = timezone.now()
+            movie.save(update_fields=['trailer_rutube_id', 'trailer_lookup_at'])
         why_reasons = self._why(me, movie)
 
         # Friends who'd like this — top-N by match%
@@ -373,6 +452,50 @@ def _pick_best_torrent(results: list[dict]) -> dict | None:
     return best if seeds(best) >= 1 else None
 
 
+def _refine_results(results, *, year=None):
+    """Tightens jacred output to feature-length releases of the right
+    year. Three-step cascade:
+      1. type=movie + year matches  — strictest, drops series + sequels.
+      2. year matches only          — handles releases without a `types` tag.
+      3. drop only mismatched-year releases (keep year-less rows).
+    Falls back to the original list if every filter empties out.
+    Without this "Тачки" surfaces "Тачки на дороге" (2022 series) at
+    the top by seed count.
+    """
+    if not results:
+        return results
+
+    def _year_of(r) -> int:
+        try:
+            return int(r.get('year') or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _is_movie(r) -> bool:
+        types = r.get('types') or []
+        return not types or 'movie' in types
+
+    if year is not None:
+        strict = [r for r in results if _is_movie(r) and _year_of(r) == year]
+        if strict:
+            return strict
+        loose_year = [r for r in results if _year_of(r) == year]
+        if loose_year:
+            return loose_year
+        # Drop only releases whose year is set AND wrong; keep any
+        # row where the upstream didn't tag a year.
+        with_typeless = [
+            r for r in results
+            if _year_of(r) == 0 or _year_of(r) == year
+        ]
+        if with_typeless:
+            return with_typeless
+        return results
+
+    movie_only = [r for r in results if _is_movie(r)]
+    return movie_only or results
+
+
 def _attach_torrent_to_room(room, movie, request_user) -> dict | None:
     """Search jacred + pick best + spin up the download task. Returns
     a {magnet, name, quality, seeds} payload or None on failure."""
@@ -380,15 +503,19 @@ def _attach_torrent_to_room(room, movie, request_user) -> dict | None:
     from apps.media_content.models import MediaItem
     from apps.media_content.tasks import download_torrent
 
-    # Prefer the original (English) title — trackers index in English far
-    # more reliably than in Russian. Fall back to Russian if missing.
-    queries = [q for q in [movie.title_orig, movie.title_ru] if q.strip()]
+    # rutracker / kinozal index releases in Russian, so try the local
+    # title first. We don't append the year to the query — jacred's
+    # search field works on the title only, so "Тачки 2006" returns
+    # zero hits even when "Тачки" returns 449. Year filtering happens
+    # downstream in _refine_results against the `relased` field.
+    titles = [t for t in (movie.title_ru, movie.title_orig) if t and t.strip()]
     chosen = None
-    for q in queries:
+    for q in titles:
         try:
             results = _jacred_search(q)
         except Exception:
             continue
+        results = _refine_results(results, year=movie.year)
         chosen = _pick_best_torrent(results)
         if chosen:
             break
@@ -409,6 +536,112 @@ def _attach_torrent_to_room(room, movie, request_user) -> dict | None:
         'seeds': chosen.get('seeds'),
         'provider': chosen.get('provider', ''),
     }
+
+
+class RecsSearchView(APIView):
+    """Title search across the catalog.
+
+    Strategy: try local LIKE on title_ru / title_orig first — that's
+    instant. If we have <6 hits, hit TMDb (proxied) and upsert any
+    new movies, then merge the results so popular films the seed
+    didn't grab are still findable.
+
+    Cached `search:<query>` for 30 min so a flurry of debounce
+    requests doesn't burn the TMDb quota.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import Q as _Q
+        query = (request.query_params.get('q') or '').strip()
+        limit = max(1, min(20, int(request.query_params.get('limit') or 20)))
+        if len(query) < 2:
+            return Response([])
+
+        cache_key = f'recs_search:{query.lower()}:{limit}'
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
+        local = list(
+            Movie.objects
+            .filter(_Q(title_ru__icontains=query) | _Q(title_orig__icontains=query))
+            .order_by('-kp_rating')[:limit]
+        )
+        if len(local) < 6:
+            # Top-up via TMDb. Upsert each into the catalog so taste
+            # signals / WatchIntent on these films persist.
+            seen_tmdb_ids = {m.tmdb_id for m in local}
+            for raw in tmdb.search(query, limit=limit):
+                tmdb_id = raw.get('id')
+                if not tmdb_id or tmdb_id in seen_tmdb_ids:
+                    continue
+                upserted = tmdb.fetch(int(tmdb_id)) or tmdb.upsert(raw)
+                if upserted is not None:
+                    local.append(upserted)
+                    seen_tmdb_ids.add(tmdb_id)
+                    if len(local) >= limit:
+                        break
+
+        payload = MovieMiniSerializer(local, many=True).data
+        cache.set(cache_key, payload, timeout=30 * 60)
+        return Response(payload)
+
+
+class OnboardingTasteView(APIView):
+    """Cold-start helper: shows 12 diverse posters spanning genres so
+    a new user can flag interest before hitting the empty feed.
+
+    GET  → 12 movies, one per top genre, picked by rating desc.
+    POST {liked_movie_ids: [int]} → bulk-create WatchIntent rows.
+    """
+    permission_classes = [IsAuthenticated]
+
+    # Top genres by typical user appeal — covers most tastes without
+    # asking 30 questions. Slugs match Genre.slug values populated by
+    # the TMDb importer.
+    _GENRE_SLUGS = (
+        'drama', 'comedy', 'thriller', 'action', 'sci-fi', 'romance',
+        'animation', 'horror', 'fantasy', 'crime', 'history', 'family',
+    )
+
+    def get(self, request):
+        from apps.movies.models import Genre
+        out = []
+        seen_movie_ids: set[int] = set()
+        for slug in self._GENRE_SLUGS:
+            genre = Genre.objects.filter(slug=slug).first()
+            if genre is None:
+                continue
+            movie = (
+                Movie.objects
+                .filter(genres=genre, is_series=False, kp_rating__lte=9)
+                .exclude(id__in=seen_movie_ids)
+                .exclude(poster_url='')
+                .order_by('-kp_rating')
+                .first()
+            )
+            if movie is None:
+                continue
+            seen_movie_ids.add(movie.id)
+            out.append(movie)
+            if len(out) >= 12:
+                break
+        return Response(MovieMiniSerializer(out, many=True).data)
+
+    def post(self, request):
+        ids_raw = request.data.get('liked_movie_ids') or []
+        try:
+            ids = [int(i) for i in ids_raw]
+        except (TypeError, ValueError):
+            return Response({'detail': 'liked_movie_ids must be a list of ints'},
+                            status=400)
+        if not ids:
+            return Response({'count': 0}, status=200)
+        movies = list(Movie.objects.filter(id__in=ids))
+        for m in movies:
+            WatchIntent.objects.get_or_create(user=request.user, movie=m)
+        return Response({'count': len(movies)}, status=201)
 
 
 class RecsTitleInviteView(APIView):

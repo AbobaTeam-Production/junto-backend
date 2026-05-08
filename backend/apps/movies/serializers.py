@@ -20,7 +20,7 @@ class MovieMiniSerializer(serializers.ModelSerializer):
     class Meta:
         model = Movie
         fields = (
-            'id', 'kp_id', 'title_ru', 'title_orig', 'year',
+            'id', 'tmdb_id', 'title_ru', 'title_orig', 'year',
             'poster_url', 'poster_preview_url',
             'duration_min', 'kp_rating', 'genres',
         )
@@ -30,11 +30,18 @@ class MovieMiniSerializer(serializers.ModelSerializer):
 
 
 class MovieDetailSerializer(MovieMiniSerializer):
+    trailer_embed_url = serializers.SerializerMethodField()
+
     class Meta(MovieMiniSerializer.Meta):
         fields = MovieMiniSerializer.Meta.fields + (
             'backdrop_url', 'synopsis_ru', 'short_synopsis',
-            'imdb_rating', 'is_series',
+            'imdb_rating', 'is_series', 'trailer_embed_url',
         )
+
+    def get_trailer_embed_url(self, obj):
+        if obj.trailer_rutube_id:
+            return f'https://rutube.ru/play/embed/{obj.trailer_rutube_id}/'
+        return None
 
 
 class FriendPresenceSerializer(serializers.Serializer):

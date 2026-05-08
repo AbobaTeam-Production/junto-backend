@@ -1,0 +1,35 @@
+# LiveKit production config.
+# - port 7880 — signaling, fronted by nginx with TLS
+# - port 7881 — TCP fallback for clients that can't UDP
+# - port 7882/udp — RTC media (single multiplexed UDP port — Docker maps as
+#   `7882:7882/udp` so kernel iptables forwards correctly without the
+#   docker-proxy userspace binary breaking sticky 5-tuples).
+# - external_ip — your VPS public IP. Required for SDP candidates the
+#   peers must reach. Can also be a hostname.
+
+port: 7880
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: true
+  # Hard-pin if STUN auto-discovery fails on first boot:
+  # external_ip: 37.228.88.62
+
+# Keys are passed via the LIVEKIT_KEYS env var in docker-compose.prod.yml,
+# which expands to "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}". Don't
+# also list them here — last writer wins and you'll get auth-mismatch
+# errors that look like "invalid token".
+
+logging:
+  level: info
+  json: true
+
+# TURN — optional, mostly for clients behind symmetric NAT. Comment out
+# until you have a TLS cert (`turn.juntoapp.tech` if you split it off).
+# turn:
+#   enabled: true
+#   tls_port: 5349
+#   external_tls: true
+#   domain: livekit.juntoapp.tech
+#   cert_file: /etc/letsencrypt/live/livekit.juntoapp.tech/fullchain.pem
+#   key_file: /etc/letsencrypt/live/livekit.juntoapp.tech/privkey.pem

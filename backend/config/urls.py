@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/media/', include('apps.media_content.urls')),
     path('api/', include('apps.social.urls')),
     path('api/recs/', include('apps.movies.urls')),
+    path('api/billing/', include('apps.billing.urls')),
 ]
 
 if settings.DEBUG:
