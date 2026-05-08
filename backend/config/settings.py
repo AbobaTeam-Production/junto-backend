@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'apps.rooms',
     'apps.media_content',
     'apps.social',
+    'apps.movies',
 ]
 
 MIDDLEWARE = [
@@ -46,6 +47,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.movies.middleware.PresenceMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -151,6 +153,17 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB per chunk
 LIVEKIT_API_KEY = os.environ.get('LIVEKIT_API_KEY', '')
 LIVEKIT_API_SECRET = os.environ.get('LIVEKIT_API_SECRET', '')
 LIVEKIT_WS_URL = os.environ.get('LIVEKIT_WS_URL', '')
+
+# Firebase / FCM. When unset, push.send_to_user() is a quiet no-op so
+# dev environments without Firebase keep working. Flipped to True in
+# apps.social.apps.SocialConfig.ready() if the SDK initialises cleanly.
+FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH', '')
+FCM_ENABLED = False
+
+# poiskkino.dev — Kinopoisk-clone metadata API (X-API-KEY header).
+# Empty key disables the recommendations endpoints; the FE just shows
+# placeholder posters.
+POISKKINO_API_KEY = os.environ.get('POISKKINO_API_KEY', '')
 
 # Caches
 CACHES = {

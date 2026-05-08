@@ -1,13 +1,57 @@
 """Social-graph + activity models.
 
-Adds `WatchSession` (phase B — recorded per WS connect to a room) and
+Adds `WatchSession` (phase B — recorded per WS connect to a room),
 `Friendship` (phase C — mutual friend relation with pending/accepted
-states). UserDevice lands later when push lands.
+states) and `UserDevice` (phase E — FCM tokens for push delivery).
 """
 
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+
+
+class UserDevice(models.Model):
+    """A push-capable device the user is signed in on.
+
+    One row per (user, fcm_token). FCM tokens rotate (new install, app
+    data clear, manual refresh) so the same device produces many rows
+    over time — invalid tokens are pruned by `apps.social.push` when
+    send returns UNREGISTERED / INVALID_ARGUMENT.
+    """
+
+    PLATFORM_ANDROID = 'android'
+    PLATFORM_IOS = 'ios'
+    PLATFORM_WEB = 'web'
+    PLATFORMS = [
+        (PLATFORM_ANDROID, 'Android'),
+        (PLATFORM_IOS, 'iOS'),
+        (PLATFORM_WEB, 'Web'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='devices',
+    )
+    fcm_token = models.TextField()
+    platform = models.CharField(max_length=10, choices=PLATFORMS)
+    last_seen_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'user_devices'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'fcm_token'],
+                name='userdevice_unique_token_per_user',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['user']),
+        ]
+
+    def __str__(self):
+        return f'{self.user_id}/{self.platform} {self.fcm_token[:12]}…'
 
 
 class WatchSession(models.Model):

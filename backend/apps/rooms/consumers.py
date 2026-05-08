@@ -5,6 +5,8 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.core.cache import cache
 
+from apps.media_content.tasks import ROOM_MEDIA_CACHE_TTL, room_media_cache_key
+
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
 
@@ -228,10 +230,14 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         cache.set(f'room_state_{self.room_id}', state, timeout=86400)
 
     def _save_current_media(self, media_info):
-        cache.set(f'room_media_{self.room_id}', json.dumps(media_info), timeout=86400)
+        cache.set(
+            room_media_cache_key(self.room_id),
+            json.dumps(media_info),
+            timeout=ROOM_MEDIA_CACHE_TTL,
+        )
 
     def _get_current_media(self):
-        data = cache.get(f'room_media_{self.room_id}')
+        data = cache.get(room_media_cache_key(self.room_id))
         if data:
             return json.loads(data)
         return None

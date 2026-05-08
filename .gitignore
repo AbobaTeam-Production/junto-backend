@@ -13,3 +13,7 @@ venv/
 *.swp
 *.swo
 db.sqlite3
+
+# Firebase service account credentials — never commit.
+**/firebase-credentials.json
+**/junto-*-firebase-adminsdk-*.json
