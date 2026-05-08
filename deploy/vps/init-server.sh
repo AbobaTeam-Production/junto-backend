@@ -3,31 +3,33 @@
 # Run as `ubuntu` user with passwordless sudo. Idempotent — safe to re-run.
 
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 DOMAINS=(api.juntoapp.tech app.juntoapp.tech livekit.juntoapp.tech)
 EMAIL="alexfake95@gmail.com"
 
 echo "==> apt update + base packages"
-sudo apt-get update -qq
-sudo apt-get install -y -qq ca-certificates curl gnupg ufw
+sudo -E apt-get update -qq
+sudo -E apt-get install -y -qq ca-certificates curl gnupg ufw
 
 echo "==> Docker engine + compose plugin"
 if ! command -v docker >/dev/null 2>&1; then
     sudo install -m 0755 -d /etc/apt/keyrings
+    # --batch + --yes so gpg doesn't try to read from /dev/tty under nohup
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
     sudo chmod a+r /etc/apt/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
 https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
         | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    sudo -E apt-get update -qq
+    sudo -E apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     sudo usermod -aG docker "$USER"
     echo "    note: log out & back in for the docker group to apply"
 fi
 
 echo "==> certbot (apt build, talks directly to /etc/letsencrypt)"
-sudo apt-get install -y -qq certbot
+sudo -E apt-get install -y -qq certbot
 
 echo "==> firewall (ufw)"
 sudo ufw allow 22/tcp

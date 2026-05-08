@@ -255,6 +255,13 @@ def _jacred_search(query: str) -> list[dict]:
             'category': it.get('videotype', ''),
             'quality': it.get('quality', 0),
             'voices': list(it.get('voices') or []),
+            # Year of the release + media kind. The recs auto-picker
+            # uses these to drop sequels and series when the user
+            # invited around a specific film. `relased` is the
+            # upstream typo, propagated here for callers that match
+            # on the original field name.
+            'year': it.get('relased'),
+            'types': list(it.get('types') or []),
             'magnet': magnet,
         })
     return results

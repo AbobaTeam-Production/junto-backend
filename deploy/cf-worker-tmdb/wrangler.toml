@@ -1,0 +1,13 @@
+name = "tmdb-proxy"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+
+# After first deploy:
+#   wrangler deploy
+#   wrangler secret put SHARED_SECRET
+# Generate the secret with:
+#   openssl rand -hex 32
+# and put the same value into junto_backend/.env as TMDB_PROXY_SECRET.
+
+[observability]
+enabled = true

@@ -25,11 +25,12 @@ class Genre(models.Model):
 class Movie(models.Model):
     """One movie with metadata pulled from poiskkino.dev.
 
-    `kp_id` is the upstream Kinopoisk ID — primary external key. We
-    upsert by it on every fetch so refresh-on-demand keeps posters /
-    ratings fresh.
+    `tmdb_id` is the upstream The Movie DB ID — primary external key.
+    We upsert by it on every fetch so refresh-on-demand keeps posters
+    / ratings fresh. Source moved from poiskkino.dev → TMDb (via the
+    cf-worker-tmdb reverse-proxy).
     """
-    kp_id = models.BigIntegerField(unique=True, db_index=True)
+    tmdb_id = models.BigIntegerField(unique=True, db_index=True)
     title_ru = models.CharField(max_length=255)
     title_orig = models.CharField(max_length=255, blank=True, default='')
     year = models.PositiveSmallIntegerField(null=True, blank=True)
@@ -46,6 +47,12 @@ class Movie(models.Model):
         max_digits=4, decimal_places=2, null=True, blank=True,
     )
     is_series = models.BooleanField(default=False)
+    # Rutube video id for the trailer. Lazy-fetched on the first
+    # /api/recs/title/<id>/ request and cached on the row, so the
+    # title detail page can show a real play button. Empty when we
+    # have searched and found nothing.
+    trailer_rutube_id = models.CharField(max_length=64, blank=True, default='')
+    trailer_lookup_at = models.DateTimeField(null=True, blank=True)
     genres = models.ManyToManyField(Genre, related_name='movies', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

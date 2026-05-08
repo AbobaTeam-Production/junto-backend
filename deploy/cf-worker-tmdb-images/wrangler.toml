@@ -1,0 +1,18 @@
+name = "tmdb-images-proxy"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+
+# After first deploy:
+#   wrangler deploy
+#
+# No secret needed — these are public TMDb posters that have to be
+# loadable from <img src=...> tags in the app. Anyone could derive
+# the upstream URL from the public app, so gating the proxy adds no
+# real protection — it only breaks foreground image loading.
+#
+# CF caches by default for ~30s on free plan; we explicitly bump to
+# a year because TMDb image paths are content-hashed (the path
+# changes when the artwork changes), so they're safe to cache hard.
+
+[observability]
+enabled = true

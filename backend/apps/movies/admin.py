@@ -11,7 +11,7 @@ class GenreAdmin(admin.ModelAdmin):
 
 @admin.register(Movie)
 class MovieAdmin(admin.ModelAdmin):
-    list_display = ('title_ru', 'year', 'kp_rating', 'is_series', 'kp_id')
+    list_display = ('title_ru', 'year', 'kp_rating', 'is_series', 'tmdb_id')
     search_fields = ('title_ru', 'title_orig')
     list_filter = ('is_series', 'year')
     readonly_fields = ('created_at', 'updated_at')

@@ -40,11 +40,25 @@ class JoinRoomView(generics.CreateAPIView):
                 status=status.HTTP_410_GONE,
             )
 
-        if room.members.count() >= 10:
-            return Response(
-                {'error': 'Комната заполнена (максимум 10 участников)'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        # Cap is set by the host's billing tier — Free: 2 guests, Pro:
+        # 10, Cinema: 25. Already-joined members re-using their slot
+        # bypass the check.
+        from apps.billing.utils import max_room_guests
+        already_member = RoomMember.objects.filter(
+            room=room, user=request.user).exists()
+        if not already_member:
+            host = room.host
+            host_cap = max_room_guests(host)
+            current_guests = room.members.exclude(user=host).count()
+            if current_guests >= host_cap:
+                return Response(
+                    {
+                        'error': 'Комната заполнена',
+                        'paywall': 'room_size',
+                        'host_tier_max_guests': host_cap,
+                    },
+                    status=status.HTTP_402_PAYMENT_REQUIRED,
+                )
 
         member, created = RoomMember.objects.get_or_create(
             room=room, user=request.user,

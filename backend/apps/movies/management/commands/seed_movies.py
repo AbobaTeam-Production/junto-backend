@@ -8,7 +8,7 @@ Idempotent — every call upserts. Safe to re-run after schema changes.
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from apps.movies import poiskkino
+from apps.movies import tmdb
 from apps.movies.models import Movie, MoodList, MoodEntry
 
 
@@ -98,16 +98,25 @@ class Command(BaseCommand):
                             help='How many top-rated KP movies to fetch.')
 
     def handle(self, *args, **options):
-        if not poiskkino._enabled():
-            self.stderr.write('POISKKINO_API_KEY is empty — set it in .env first.')
+        if not tmdb._enabled():
+            self.stderr.write(
+                'TMDb env not set — need TMDB_API_KEY + TMDB_PROXY_BASE '
+                '+ TMDB_PROXY_SECRET in .env. See deploy/cf-worker-tmdb/.'
+            )
             return
 
         # ── Step 1 — bulk top-N for the catalog
+        # The discover endpoint omits `runtime`, so we hop to /movie/{id}
+        # for each result to get full details (runtime + genres). 80
+        # extra calls ≈ 2 seconds against TMDb's free tier.
         target = options.get('limit') or 80
-        self.stdout.write(f'Pulling top-{target} KP movies…')
+        self.stdout.write(f'Pulling top-{target} TMDb movies…')
         seeded = 0
-        for raw in poiskkino.top_n(limit=target):
-            m = poiskkino.upsert(raw)
+        for raw in tmdb.top_rated(limit=target):
+            tmdb_id = raw.get('id')
+            m = tmdb.fetch(tmdb_id) if tmdb_id else None
+            if m is None:
+                m = tmdb.upsert(raw)
             if m is not None:
                 seeded += 1
         self.stdout.write(self.style.SUCCESS(f'  → upserted {seeded} from top'))
@@ -127,11 +136,11 @@ class Command(BaseCommand):
                 )
                 MoodEntry.objects.filter(mood=mood).delete()
                 for position, (query, why) in enumerate(mood_def['picks']):
-                    hits = poiskkino.search(query, limit=1)
+                    hits = tmdb.search(query, limit=1)
                     if not hits:
                         self.stderr.write(f'  ! no hit for "{query}"')
                         continue
-                    movie = poiskkino.fetch(hits[0]['id']) or poiskkino.upsert(hits[0])
+                    movie = tmdb.fetch(hits[0]['id']) or tmdb.upsert(hits[0])
                     if movie is None:
                         continue
                     MoodEntry.objects.create(
@@ -139,6 +148,28 @@ class Command(BaseCommand):
                         position=position, why_text=why,
                     )
                 self.stdout.write(f'  ✓ {mood.title}: {mood.entries.count()} entries')
+
+        # ── Step 3 — pre-warm the CF image cache ──
+        # Hit each poster / preview / backdrop URL once so the
+        # Worker caches the bytes at its edge. Without this, the
+        # first user pulling the feed triggers 30+ concurrent
+        # CDN-warmups and Cloudflare's burst limit drops some,
+        # leaving random tiles as placeholders.
+        urls: list[str] = []
+        for movie in Movie.objects.all().only(
+            'poster_url', 'poster_preview_url', 'backdrop_url',
+        ):
+            urls.extend(
+                u for u in (
+                    movie.poster_url,
+                    movie.poster_preview_url,
+                    movie.backdrop_url,
+                ) if u
+            )
+        if urls:
+            self.stdout.write(f'Pre-warming {len(urls)} image URLs at CF edge…')
+            warmed = tmdb.prewarm_images(urls)
+            self.stdout.write(self.style.SUCCESS(f'  → warmed {warmed}/{len(urls)}'))
 
         self.stdout.write(self.style.SUCCESS(
             f'\nDone. Movies in DB: {Movie.objects.count()}, '
