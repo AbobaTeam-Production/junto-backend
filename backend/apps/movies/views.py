@@ -286,11 +286,15 @@ class RecsMoodView(APIView):
     # Match against title_orig because the Russian release titles are all
     # over the place (Marvel-фильм, Мстители, Человек-паук, etc) and the
     # original Latin titles are far more consistent.
+    #
+    # Postgres uses POSIX regex through `__iregex`, so neither `\b` nor
+    # `\s` work — use `[ -]?` for "optional space-or-dash" and skip word
+    # boundaries entirely. iregex is already case-insensitive so no `(?i)`.
     _MARVEL_RE = (
-        r'(?i)\b(marvel|avengers|iron[\s-]?man|thor|captain[\s-]?america|'
-        r'x[\s-]?men|spider[\s-]?man|spider-?verse|hulk|deadpool|wolverine|'
-        r'guardians of the galaxy|black[\s-]?panther|black[\s-]?widow|'
-        r'ant[\s-]?man|doctor[\s-]?strange|loki|wanda|venom|fantastic four)\b'
+        r'(marvel|avengers|iron[ -]?man|thor|captain[ -]?america|'
+        r'x[ -]?men|spider[ -]?man|spider-?verse|hulk|deadpool|wolverine|'
+        r'guardians of the galaxy|black[ -]?panther|black[ -]?widow|'
+        r'ant[ -]?man|doctor[ -]?strange|loki|wanda|venom|fantastic four)'
     )
 
     @classmethod
