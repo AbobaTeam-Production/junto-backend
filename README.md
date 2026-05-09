@@ -1,3 +1,5 @@
+**🇷🇺 Гайд по self-hosting на русском — [`docs/SELF_HOSTING.ru.md`](docs/SELF_HOSTING.ru.md).**
+
 # junto-backend
 
 Django + Daphne backend for [Junto](https://juntoapp.tech) — synchronous group movie watching with voice chat. Powers the API, WebSocket sync, media pipeline (HLS transcode + torrent ingest + rutube extractor), LiveKit voice SFU, and FCM push delivery.
@@ -66,6 +68,8 @@ The dev stack publishes nginx on `http://localhost:8080` and `https://junto.loca
 | Run `deploy.sh` on VPS | `deploy/vps/deploy.sh` | Pull → up → migrate → seed_plans → collectstatic → nginx reload |
 
 ## Self-hosting
+
+> 🇷🇺 Полная пошаговая инструкция на русском — [`docs/SELF_HOSTING.ru.md`](docs/SELF_HOSTING.ru.md).
 
 You can run your own Junto from a single Linux VPS. Same code that powers `juntoapp.tech` — no feature gating for self-hosters: tier checks return Pro by default when you control the database, and the only paid surface is the mock-checkout UI which you can leave alone or remove.
 
