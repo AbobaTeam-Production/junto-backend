@@ -277,12 +277,48 @@ class RecsMoodView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug: str):
+        # `sponsored` is a synthetic mood injected into /recs/feed/ as the
+        # ad slot for free users — there's no MoodList row for it. Build
+        # a real-looking detail payload on the fly so the FE can navigate.
+        if slug == 'sponsored':
+            return Response(self._sponsored_payload())
         mood = get_object_or_404(MoodList, slug=slug)
         entries = mood.entries.select_related('movie').prefetch_related('movie__genres').order_by('position')
         return Response({
             'mood': MoodListSerializer(mood).data,
             'items': MoodEntrySerializer(entries, many=True).data,
         })
+
+    @staticmethod
+    def _sponsored_payload():
+        # Top-rated unwatched titles, posing as a sponsored editorial.
+        # Keep the count in sync with the placeholder card in /recs/feed/.
+        movies = list(
+            Movie.objects
+            .filter(is_series=False, duration_min__gte=60)
+            .exclude(poster_url='')
+            .order_by('-kp_rating')[:8]
+        )
+        items = []
+        for i, m in enumerate(movies):
+            items.append({
+                'id': -1 - i,
+                'position': i,
+                'why_text': 'Партнёрская подборка',
+                'movie': MovieMiniSerializer(m).data,
+            })
+        return {
+            'mood': {
+                'id': 0,
+                'slug': 'sponsored',
+                'title': 'Marvel ночь от партнёров',
+                'subtitle': 'Реклама',
+                'hue': 30,
+                'count': len(items),
+                'is_sponsored': True,
+            },
+            'items': items,
+        }
 
 
 class RecsTitleView(APIView):
