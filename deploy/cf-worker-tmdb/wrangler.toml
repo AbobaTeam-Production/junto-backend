@@ -11,3 +11,9 @@ compatibility_date = "2024-12-01"
 
 [observability]
 enabled = true
+
+# Same reason as tmdb-images-proxy — TMDb metadata API is fronted by
+# CloudFront and geoblocks RU. Smart Placement runs the worker near
+# origin so the upstream sees a non-RU IP.
+[placement]
+mode = "smart"
