@@ -14,6 +14,10 @@ Production stack on a single Ubuntu 24.04 box. All services run as Docker contai
 | livekit | 7880 / 7881 / 7882-udp | Voice/video SFU |
 | jacred | 9117 (internal) | Torrent search shim |
 | torrserver | 8090 (internal) | HTTP streaming for magnet sources |
+| prometheus | 9090 (internal) | Metrics scrape + 30d TSDB |
+| grafana | 3000 (internal) | Dashboards / alerts UI |
+| node-exporter | 9100 (internal) | Host metrics (CPU/RAM/disk/net) |
+| cadvisor | 8080 (internal) | Per-container metrics |
 
 ## Subdomain routing
 
@@ -22,6 +26,7 @@ Production stack on a single Ubuntu 24.04 box. All services run as Docker contai
 | `api.juntoapp.tech` | `/api/`, `/ws/`, `/admin/`, `/media/`, `/torrserver/` → backend / torrserver |
 | `livekit.juntoapp.tech` | LiveKit signaling (`wss://`) |
 | `app.juntoapp.tech` | Static Flutter Web build |
+| `grafana.juntoapp.tech` | Grafana UI |
 | `juntoapp.tech` | GitHub Pages — landing (handled outside this stack) |
 
 DNS A-records for `api`, `app`, `livekit` point at the VPS; apex points at GitHub Pages — see the landing repo.
@@ -93,6 +98,37 @@ docker run --rm -v junto_webapp:/dst -v /tmp/junto-web:/src alpine \
 ```
 
 Or wire this into a separate CI job that pushes a tarball to the box on push.
+
+## Monitoring (Grafana)
+
+Grafana lives at `https://grafana.juntoapp.tech`. First-time setup:
+
+```bash
+# 1. Add A-record:  grafana.juntoapp.tech → <VPS-IP>
+
+# 2. On the VPS — issue the cert (nginx must already be up)
+ssh ubuntu@<VPS-IP>
+cd /srv/junto
+docker compose -f docker-compose.prod.yml --env-file .env exec nginx \
+    sh -c 'mkdir -p /var/www/certbot'
+docker run --rm \
+    -v /etc/letsencrypt:/etc/letsencrypt \
+    -v junto_certbot-www:/var/www/certbot \
+    certbot/certbot certonly --webroot -w /var/www/certbot \
+    -d grafana.juntoapp.tech --email you@example.com --agree-tos --non-interactive
+
+# 3. Set GRAFANA_ADMIN_PASSWORD in .env (default is "admin" → CHANGE IT)
+echo 'GRAFANA_ADMIN_PASSWORD=<long-random>' >> .env
+
+# 4. Bring up the new services + reload nginx
+./deploy.sh
+docker compose -f docker-compose.prod.yml --env-file .env exec nginx nginx -s reload
+```
+
+Login at `https://grafana.juntoapp.tech` with `admin` / your password. Prometheus is preconfigured as the default datasource. Recommended dashboards to import (UI → "Import" → enter ID):
+
+- **1860** — Node Exporter Full (host metrics)
+- **193**  — Docker / cadvisor
 
 ## Cert renewal
 
