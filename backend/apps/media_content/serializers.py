@@ -19,12 +19,18 @@ class MediaItemSerializer(serializers.ModelSerializer):
                             'progress', 'created_at')
 
     def get_hls_url(self, obj):
-        if obj.hls_path:
-            # External URLs (e.g. Rutube HLS) are returned as-is
-            if obj.hls_path.startswith('http'):
-                return obj.hls_path
-            return f'/media/{obj.hls_path}'
-        return None
+        if not obj.hls_path:
+            return None
+        # External URLs (e.g. Rutube HLS) are returned as-is.
+        if obj.hls_path.startswith('http'):
+            return obj.hls_path
+        # Already a host-absolute path (e.g. `/api/media/proxy/?u=...`):
+        # don't prepend `/media/`, the frontend will hit it directly.
+        if obj.hls_path.startswith('/'):
+            return obj.hls_path
+        # Relative path inside MEDIA_ROOT — transcoded HLS like
+        # `hls/<room>/stream.m3u8`.
+        return f'/media/{obj.hls_path}'
 
     def get_youtube_video_id(self, obj):
         """Extract Rutube video ID from URL (field kept as youtube_video_id for compatibility)."""
