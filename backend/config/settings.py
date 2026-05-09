@@ -7,8 +7,12 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-dev-key')
-DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
+# Default-deny for prod: any deploy that forgets DEBUG=False ends up with
+# Django error pages exposing tracebacks + CORS_ALLOW_ALL_ORIGINS=True
+# (see below). Local dev opts in via DEBUG=True in .env.
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
+# Same reasoning — explicit hosts in prod, dev sets ALLOWED_HOSTS=*.
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 # Behind nginx — trust the X-Forwarded-Proto header so request.is_secure()
 # returns True for HTTPS clients. Without this, dynamically built WS/HTTP
@@ -100,10 +104,13 @@ MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(BASE_DIR / 'media'))
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS
+# CORS — explicit allowlist driven by env. Don't tie this to DEBUG: a
+# stray DEBUG=True in prod would otherwise let any origin call our API
+# with the browser's session, exfiltrating /api/auth/profile et al.
 cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '')
 CORS_ALLOWED_ORIGINS = [o.strip() for o in cors_origins.split(',') if o.strip()]
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+# Local dev only: opt-in via env var. Never coupled to DEBUG.
+CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL', 'False').lower() in ('true', '1', 'yes')
 
 # DRF
 REST_FRAMEWORK = {
