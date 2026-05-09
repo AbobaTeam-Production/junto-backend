@@ -199,15 +199,8 @@ class RecsFeedView(APIView):
         # extra editorial slot ("Премьеры недели") instead.
         from apps.billing.utils import is_pro as _is_pro
         if not _is_pro(me):
-            moods_payload.insert(0, {
-                'id': 0,
-                'slug': 'sponsored',
-                'title': 'Marvel ночь от партнёров',
-                'subtitle': 'Реклама',
-                'hue': 30,
-                'count': 8,
-                'is_sponsored': True,
-            })
+            sponsored_card = RecsMoodView._sponsored_payload()['mood']
+            moods_payload.insert(0, sponsored_card)
 
         return Response({
             'friends_online': friends_payload,
@@ -289,30 +282,69 @@ class RecsMoodView(APIView):
             'items': MoodEntrySerializer(entries, many=True).data,
         })
 
-    @staticmethod
-    def _sponsored_payload():
-        # Top-rated unwatched titles, posing as a sponsored editorial.
-        # Keep the count in sync with the placeholder card in /recs/feed/.
-        movies = list(
+    # Regex covering the Marvel cinematic / Sony-Spider-Man / Fox catalogs.
+    # Match against title_orig because the Russian release titles are all
+    # over the place (Marvel-фильм, Мстители, Человек-паук, etc) and the
+    # original Latin titles are far more consistent.
+    _MARVEL_RE = (
+        r'(?i)\b(marvel|avengers|iron[\s-]?man|thor|captain[\s-]?america|'
+        r'x[\s-]?men|spider[\s-]?man|spider-?verse|hulk|deadpool|wolverine|'
+        r'guardians of the galaxy|black[\s-]?panther|black[\s-]?widow|'
+        r'ant[\s-]?man|doctor[\s-]?strange|loki|wanda|venom|fantastic four)\b'
+    )
+
+    @classmethod
+    def _sponsored_payload(cls):
+        # The "Marvel ночь от партнёров" card in /recs/feed/ should land
+        # on a real Marvel set when the catalog has enough of them.
+        # Otherwise fall back to top-rated and rebrand the card so the
+        # title doesn't lie about what's on the screen.
+        marvel = list(
             Movie.objects
             .filter(is_series=False, duration_min__gte=60)
+            .filter(title_orig__iregex=cls._MARVEL_RE)
             .exclude(poster_url='')
             .order_by('-kp_rating')[:8]
         )
+        # We rebrand the card on the fly: ≥3 marvel hits → market it as
+        # "Marvel-марафон" and just top up the carousel with top-rated
+        # filler. <3 hits → drop the brand entirely and call it
+        # "Хиты от партнёров" so the title doesn't lie.
+        if len(marvel) >= 3:
+            top_filler = list(
+                Movie.objects
+                .filter(is_series=False, duration_min__gte=60)
+                .exclude(poster_url='')
+                .exclude(id__in=[m.id for m in marvel])
+                .order_by('-kp_rating')[: 8 - len(marvel)]
+            )
+            movies = marvel + top_filler
+            title = 'Marvel-марафон от партнёров'
+            why_text = 'Из вселенной Marvel'
+        else:
+            movies = list(
+                Movie.objects
+                .filter(is_series=False, duration_min__gte=60)
+                .exclude(poster_url='')
+                .order_by('-kp_rating')[:8]
+            )
+            title = 'Хиты от партнёров'
+            why_text = 'Партнёрская подборка'
+
         items = []
         for i, m in enumerate(movies):
             items.append({
                 'id': -1 - i,
                 'position': i,
-                'why_text': 'Партнёрская подборка',
+                'why_text': why_text,
                 'movie': MovieMiniSerializer(m).data,
             })
         return {
             'mood': {
                 'id': 0,
                 'slug': 'sponsored',
-                'title': 'Marvel ночь от партнёров',
-                'subtitle': 'Реклама',
+                'title': title,
+                'subtitle': 'Реклама · от партнёров',
                 'hue': 30,
                 'count': len(items),
                 'is_sponsored': True,
