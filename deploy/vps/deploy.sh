@@ -37,5 +37,13 @@ echo "==> collectstatic"
 docker compose -f docker-compose.prod.yml --env-file .env exec -T backend \
     python manage.py collectstatic --noinput
 
+# nginx caches the resolved IP for `upstream backend` at startup. When
+# `up -d` recreates the backend container with a fresh IP, every proxied
+# request 502s with `connect() failed (111: Connection refused)` until
+# we reload nginx and let it re-resolve via Docker's embedded DNS.
+echo "==> nginx reload (refresh upstream IPs)"
+docker compose -f docker-compose.prod.yml --env-file .env exec -T nginx \
+    nginx -s reload || true
+
 echo "==> running services:"
 docker compose -f docker-compose.prod.yml --env-file .env ps
