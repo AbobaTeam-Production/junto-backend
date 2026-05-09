@@ -1,11 +1,15 @@
 import os
 import re
 import unicodedata
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
 from rest_framework import generics, status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django.conf import settings
+from django.http import StreamingHttpResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -19,6 +23,129 @@ from .serializers import (
     YouTubeAddSerializer,
 )
 from .tasks import transcode_to_hls
+
+
+# Hosts that the media proxy is allowed to fetch from. Open-proxy
+# protection — anyone hitting /api/media/proxy/?u=<arbitrary> will get
+# a 400 unless the host is in this whitelist.
+_PROXY_HOST_ALLOWLIST = (
+    'rutube.ru',
+    'bl.rutube.ru',
+)
+
+
+def _is_proxy_host_allowed(host: str) -> bool:
+    host = host.lower()
+    return any(host == h or host.endswith('.' + h) for h in _PROXY_HOST_ALLOWLIST)
+
+
+def _rewrite_m3u8(playlist_text: str, source_url: str, proxy_base: str) -> str:
+    """Rewrite every URL inside an m3u8 manifest so segment / variant
+    requests come back through our proxy instead of going direct to
+    rutube — that's what saves us from CORS on the segment fetches."""
+    rewritten_lines = []
+    for line in playlist_text.splitlines():
+        s = line.strip()
+        if not s or s.startswith('#'):
+            # `#EXT-X-KEY:URI="..."` etc — for rutube playlists today there
+            # are no quoted URIs we have to rewrite. If that ever changes
+            # this block will need to handle them too.
+            rewritten_lines.append(line)
+            continue
+        absolute = urljoin(source_url, s)
+        rewritten_lines.append(f'{proxy_base}?u={quote(absolute, safe="")}')
+    # m3u8 is line-based; preserve trailing newline for strict parsers.
+    return '\n'.join(rewritten_lines) + '\n'
+
+
+class MediaProxyView(APIView):
+    """Same-origin reverse-proxy for HLS sources whose CDN doesn't send
+    `Access-Control-Allow-Origin`. Rutube's `bl.rutube.ru` is the main
+    case — without this view the Web client can't load the m3u8.
+
+    Public endpoint (no auth): the upstream URL is signed by rutube
+    itself with `?sign=&expire=` so leaking it is bounded; and Web
+    clients can't forward an Authorization header anyway.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        upstream = request.GET.get('u') or request.GET.get('url')
+        if not upstream:
+            return HttpResponse('missing ?u=', status=400)
+        upstream = unquote(upstream)
+        parsed = urlparse(upstream)
+        if parsed.scheme not in ('http', 'https') or not _is_proxy_host_allowed(parsed.hostname or ''):
+            return HttpResponse('host not allowed', status=400)
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://rutube.ru/',
+            # Pass through Range so seek requests on segments work.
+            **({'Range': request.headers['Range']} if 'Range' in request.headers else {}),
+        }
+
+        is_playlist = upstream.split('?', 1)[0].endswith('.m3u8')
+        if is_playlist:
+            # Playlists are small — buffer fully so we can rewrite URLs.
+            try:
+                with httpx.Client(timeout=15) as client:
+                    r = client.get(upstream, headers=headers, follow_redirects=True)
+            except httpx.HTTPError as e:
+                return HttpResponse(f'upstream fetch failed: {e}', status=502)
+            if r.status_code >= 400:
+                return HttpResponse(r.text, status=r.status_code)
+
+            proxy_base = request.build_absolute_uri(request.path)
+            body = _rewrite_m3u8(r.text, upstream, proxy_base)
+            resp = HttpResponse(body, content_type='application/vnd.apple.mpegurl')
+        else:
+            # Segments — stream straight through.
+            try:
+                client = httpx.Client(timeout=30)
+                stream = client.stream('GET', upstream, headers=headers, follow_redirects=True)
+                r = stream.__enter__()
+            except httpx.HTTPError as e:
+                return HttpResponse(f'upstream fetch failed: {e}', status=502)
+            if r.status_code >= 400:
+                body = r.read()
+                client.close()
+                return HttpResponse(body, status=r.status_code)
+
+            def _stream():
+                try:
+                    for chunk in r.iter_bytes():
+                        yield chunk
+                finally:
+                    try:
+                        stream.__exit__(None, None, None)
+                    except Exception:
+                        pass
+                    client.close()
+
+            content_type = r.headers.get('content-type', 'application/octet-stream')
+            resp = StreamingHttpResponse(
+                _stream(),
+                status=r.status_code,
+                content_type=content_type,
+            )
+            for h in ('Content-Length', 'Content-Range', 'Accept-Ranges'):
+                if h in r.headers:
+                    resp[h] = r.headers[h]
+
+        # CORS — be permissive; the upstream is itself public.
+        resp['Access-Control-Allow-Origin'] = '*'
+        resp['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS'
+        resp['Access-Control-Allow-Headers'] = 'Range'
+        resp['Access-Control-Expose-Headers'] = 'Content-Length, Content-Range, Accept-Ranges'
+        # m3u8 must NOT be cached during a live transcode session;
+        # segments are immutable.
+        if is_playlist:
+            resp['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        else:
+            resp['Cache-Control'] = 'public, max-age=3600'
+        return resp
 
 
 def _check_host(user, room_id):
@@ -173,11 +300,18 @@ class YouTubeAddView(generics.CreateAPIView):
             info = _rutube_get_json(client, f'api/video/{video_id}/', video_id) or {}
             title = info.get('title') or 'Rutube video'
 
+        # Wrap rutube's m3u8 in our same-origin CORS proxy. Browsers
+        # otherwise can't load segments from `bl.rutube.ru` since rutube's
+        # CDN doesn't send Access-Control-Allow-Origin. Stored as a
+        # host-relative path so native and Web both resolve through their
+        # own server origin.
+        hls_for_clients = '/api/media/proxy/?u=' + quote(hls_url, safe='')
+
         media_item = MediaItem.objects.create(
             room=room,
             source_type='youtube',
             original_url=data['url'],
-            hls_path=hls_url,
+            hls_path=hls_for_clients,
             title=title,
             status='ready',
         )
@@ -188,7 +322,7 @@ class YouTubeAddView(generics.CreateAPIView):
             f'room_{room.id}',
             {
                 'type': 'media.ready',
-                'hls_url': hls_url,
+                'hls_url': hls_for_clients,
                 'title': title,
                 'source_type': 'upload',
             }
