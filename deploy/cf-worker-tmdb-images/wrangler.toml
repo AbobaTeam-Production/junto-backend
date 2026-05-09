@@ -16,3 +16,11 @@ compatibility_date = "2024-12-01"
 
 [observability]
 enabled = true
+
+# Smart Placement: ask CF to run this Worker close to the *origin*
+# (image.tmdb.org / CloudFront) rather than close to the requester.
+# Origin lives outside RU; running the proxy in a non-RU edge means
+# TMDb's CloudFront sees a non-RU source IP and stops returning 403
+# for users whose nearest CF edge is in RU.
+[placement]
+mode = "smart"

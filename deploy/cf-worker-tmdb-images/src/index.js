@@ -7,6 +7,11 @@
 //
 // Endpoint: https://tmdb-images-proxy.<account>.workers.dev/t/p/<size>/<path>
 // Forwards to:  https://image.tmdb.org/t/p/<size>/<path>
+//
+// Smart Placement (see wrangler.toml) keeps the runtime on a non-RU
+// edge so the upstream CloudFront sees a non-RU source IP. DoH +
+// fetch-by-IP doesn't help on the free plan: CF returns
+// `error code 1003 (direct IP access not allowed)`.
 
 const TARGET = "https://image.tmdb.org";
 
@@ -20,8 +25,6 @@ export default {
     async fetch(request) {
         const url = new URL(request.url);
 
-        // Light path-shape check — don't proxy anything other than the
-        // actual TMDb image namespace.
         if (!url.pathname.startsWith("/t/p/")) {
             return new Response("not found", { status: 404 });
         }
@@ -32,14 +35,21 @@ export default {
         });
 
         try {
+            // Only cache 2xx for a year — caching 403 baked us in earlier.
             const resp = await fetch(upstreamReq, {
-                cf: { cacheTtl: 31536000, cacheEverything: true },
+                cf: {
+                    cacheTtlByStatus: { "200-299": 31536000, "404": 60, "500-599": 0 },
+                    cacheEverything: true,
+                },
             });
             const headers = new Headers(resp.headers);
-            for (const [k, v] of Object.entries(CACHE_HEADERS)) {
-                headers.set(k, v);
+            if (resp.ok) {
+                for (const [k, v] of Object.entries(CACHE_HEADERS)) {
+                    headers.set(k, v);
+                }
+            } else {
+                headers.set("Cache-Control", "no-store");
             }
-            // Cross-origin fetch from app — be permissive.
             headers.set("Access-Control-Allow-Origin", "*");
             return new Response(resp.body, {
                 status: resp.status,
