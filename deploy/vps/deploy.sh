@@ -10,8 +10,12 @@ if [[ ! -f .env ]]; then
     exit 1
 fi
 
-echo "==> docker compose pull"
-docker compose -f docker-compose.prod.yml --env-file .env pull
+# Pull only our own images. `docker compose pull` (all) trips over
+# third-party ghcr packages (e.g. jacred-fdb/jacred) that an org-scoped
+# token can't read — they're already cached locally and rarely change,
+# so `up -d` below reuses them.
+echo "==> docker compose pull (app images)"
+docker compose -f docker-compose.prod.yml --env-file .env pull backend celery celery-beat
 
 echo "==> docker compose up -d"
 docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
