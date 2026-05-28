@@ -153,16 +153,23 @@ def _transcode_with_progress(media_id: str, room_id: str, input_path: str,
     # the <video> never even attaches to the DOM. -ac 2 sidesteps that
     # entirely and trims a bit of bandwidth too.
     #
-    # Video: pin pix_fmt=yuv420p and force even dimensions. libx264's
-    # baseline H.264 already does this, but nvenc and odd-width sources
-    # (e.g. 1194x500) can drift outside what MSE accepts.
+    # Video: pin pix_fmt=yuv420p, cap resolution at 1080p, and put a ceiling
+    # on the bitrate. Previously we only forced even dimensions and kept the
+    # source resolution + an uncapped rate — a single 2160p WEB-DL re-encoded
+    # to ~25 GB of HLS segments and filled the disk. `min(1920,iw)` downscales
+    # only when wider than 1080p (smaller sources are untouched); `-2` keeps
+    # the aspect ratio and an even height for MSE. `-maxrate/-bufsize` cap the
+    # capped-CRF (libx264) / VBR (nvenc) output so even 1080p can't balloon.
     common_video = ['-pix_fmt', 'yuv420p',
-                    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2']
+                    '-vf', "scale='min(1920,iw)':-2",
+                    '-maxrate', '6M', '-bufsize', '12M']
     common_audio = ['-c:a', 'aac', '-ac', '2', '-ar', '48000', '-b:a', '128k']
     strategies = [
-        ('nvenc', ['-c:v', 'h264_nvenc', '-preset', 'p4', '-profile:v', 'main']
+        ('nvenc', ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'vbr',
+                   '-cq', '23', '-profile:v', 'main']
                   + common_video + common_audio),
-        ('libx264', ['-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'main']
+        ('libx264', ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+                     '-profile:v', 'main']
                     + common_video + common_audio),
     ]
 
