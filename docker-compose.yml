@@ -53,9 +53,13 @@ services:
       # Path inside the container — `./backend` is mounted at /app, so a
       # JSON dropped at backend/<name>.json is reachable at /app/<name>.json.
       - FIREBASE_CREDENTIALS_PATH=${FIREBASE_CREDENTIALS_PATH:-}
-      # Movie metadata API (recommendations system). Empty = recs
-      # endpoints fall back to placeholder posters.
-      - POISKKINO_API_KEY=${POISKKINO_API_KEY:-}
+      # Movie metadata via TMDb through a Cloudflare Worker. Empty =
+      # recs feed shows placeholder posters; seed_movies refuses to
+      # run. See deploy/cf-worker-tmdb/ for the Worker code.
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - TMDB_PROXY_BASE=${TMDB_PROXY_BASE:-}
+      - TMDB_PROXY_SECRET=${TMDB_PROXY_SECRET:-}
+      - TMDB_IMAGE_BASE=${TMDB_IMAGE_BASE:-}
     volumes:
       - ./backend:/app
       - media:/media
