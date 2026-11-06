@@ -190,10 +190,16 @@ services:
       - "9100"
 
   # cadvisor exposes per-container metrics (CPU/RAM/net per service) on :8080.
+  # `--docker_only` + `--store_container_labels` re-enable the `name` label
+  # that most Grafana dashboards (e.g. ID 193) filter on; without them the
+  # default cgroup id (`/system.slice/...`) is the only series identifier.
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     restart: unless-stopped
     privileged: true
+    command:
+      - '--docker_only=true'
+      - '--store_container_labels=true'
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
